@@ -22,6 +22,12 @@
       "api_key_env": "INFOBIP_API_KEY",
       "from_number": "5511999999999",
       "to_number": "5511988888888"
+    },
+    "meta": {
+      "access_token_env": "META_WA_ACCESS_TOKEN",
+      "phone_number_id_env": "META_WA_PHONE_NUMBER_ID",
+      "api_version": "v21.0",
+      "to_number": "5511999999999"
     }
   },
   "automation": {

@@ -18,6 +18,23 @@ Automação que:
 | `whatsapp_notifier.py` | Envio via Twilio, Infobip ou console (teste) |
 | `settings.py` / `config.example.json` | Configuração |
 
+## Onde executar / hospedar
+
+A automação **não está hospedada em lugar nenhum automaticamente** — ela roda
+onde você escolher. Opções, da mais simples à mais robusta:
+
+| Opção | Custo | Como |
+|---|---|---|
+| 🖥️ Seu próprio computador | Grátis | Rode `python main.py` manualmente ou agende com cron/Agendador de Tarefas (passo 7 abaixo). Só precisa estar ligado nos horários agendados. |
+| 🌤️ Google Cloud Run Jobs / Functions | Quase grátis (crédito mensal) | Ideal: é o mesmo ecossistema do Gmail. Faça deploy da imagem Docker e agende com Cloud Scheduler. |
+| ⚡ GitHub Actions (cron) | Grátis para contas públicas/2000 min/mês | Commit do código num repo privado + workflow `.github/workflows/automail.yml` agendado; as chaves ficam em *Settings → Secrets*. |
+| 🐚 VPS barata (Contabo, DigitalOcean, Hetzner ~US$4–6/mês) | Baixo | Rode 24/7 com cron; você acessa via SSH. |
+| 🔗 Make / n8n self-hosted | Baixo/médio | Alternativa visual, mas exige adaptar a lógica de IA. |
+
+Recomendação prática: comece **no seu computador** (seco/cron local) até confiar
+nas classificações; depois migre para **GitHub Actions** ou **Cloud Run** para
+rodar 24/7 sem depender da sua máquina.
+
 ## Passo a passo de instalação
 
 ### 1. Instalar dependências
@@ -55,7 +72,12 @@ export TWILIO_AUTH_TOKEN="..."
 export INFOBIP_API_KEY="..."        # se usar Infobip
 ```
 
-> 💡 Alternativa gratuita para WhatsApp: **Meta WhatsApp Cloud API** (grátis até 1.000 conversas/dia). Se preferir essa opção, me avise que eu adapto o `whatsapp_notifier.py`.
+> 💡 Alternativa gratuita: **Meta WhatsApp Cloud API** (grátis até 1.000 conversas/dia) — já implementada! Basta escolher `"provider": "meta"` no config.json e criar um app WhatsApp em [developers.facebook.com](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started), depois:
+> ```bash
+> export META_WA_ACCESS_TOKEN="..."       # token do número de teste (24h) ou permanente (System User)
+> export META_WA_PHONE_NUMBER_ID="..."    # ID do Phone Number no painel da Meta
+> ```
+> ⚠️ Na API da Meta, para enviar mensagens livres o seu número precisa ter mandado mensagem ao número do bot nas últimas 24h (ou usar templates aprovados). Para uso pessoal, basta mandar um "oi" uma vez por dia ao número do sandbox.
 
 ### 5. Testar SEM executar ações (muito recomendado!)
 ```bash

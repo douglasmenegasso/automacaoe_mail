@@ -1,162 +1,141 @@
-"""Automação principal: lê e-mails do Gmail, classifica com IA e age.
-
-Ações por categoria:
-- spam_propaganda -> apaga (ou move para Lixeira/Arquiva, conforme config)
-- responde_se     -> envia resposta automática (se auto_reply_enabled = true)
-- precisa_humano  -> envia alerta por WhatsApp com resumo do e-mail
+"""Orquestra a automação: ler Gmail -> classificar (IA com failover) -> agir -> notificar.
 
 Uso:
-    python main.py            # processa a caixa de entrada
-    python main.py --dry-run  # analisa mas NÃO executa ações (recomendado p/ começar)
+    python main.py            # executa de verdade
+    python main.py --dry-run  # simula: nao apaga, nao responde, nao etiqueta nada
 """
-import argparse
 import base64
 import sys
 from email.mime.text import MIMEText
 
-import gmail_client
+from googleapiclient.errors import HttpError
+
+import settings
 from analyzer import classify_email
-from settings import load_config
+from gmail_client import build_service, extract_email_data
 from whatsapp_notifier import send_whatsapp
 
+LABEL_NOME = "AutoMail"
 
-def fetch_inbox_messages(service, query: str, max_results: int) -> list[dict]:
-    resp = service.users().messages().list(
-        userId="me", q=query, maxResults=max_results
+
+def _get_or_create_label(service) -> str:
+    resp = service.users().labels().list(userId="me").execute()
+    for lb in resp.get("labels", []):
+        if lb["name"].lower() == LABEL_NOME.lower():
+            return lb["id"]
+    novo = service.users().labels().create(
+        userId="me",
+        body={"name": LABEL_NOME, "labelListVisibility": "labelShow",
+              "messageListVisibility": "show"},
     ).execute()
-    return resp.get("messages", [])
+    print(f"[GMAIL] Label {LABEL_NOME} criada.")
+    return novo["id"]
 
 
-def get_message_full(service, msg_id: str) -> dict:
-    return (
-        service.users()
-        .messages()
-        .get(userId="me", id=msg_id, format="full")
-        .execute()
-    )
-
-
-def delete_message(service, msg_id: str):
-    service.users().messages().trash(userId="me", id=msg_id).execute()
-
-
-def archive_message(service, msg_id: str):
+def _apply_label(service, msg_id: str, label_id: str):
     service.users().messages().modify(
-        userId="me", id=msg_id, body={"removeLabelIds": ["INBOX", "UNREAD"]}
+        userId="me", id=msg_id, body={"addLabelIds": [label_id]}).execute()
+
+
+def _header(msg: dict, nome: str) -> str:
+    for h in msg.get("payload", {}).get("headers", []):
+        if h["name"].lower() == nome.lower():
+            return h["value"]
+    return ""
+
+
+def _send_reply(service, data: dict, msg: dict, texto: str, de_email: str):
+    """Responde na MESMA thread do e-mail original."""
+    message_id = _header(msg, "Message-ID")
+    assunto = data["subject"]
+    if not assunto.lower().startswith("re:"):
+        assunto = f"Re: {assunto}"
+    mime = MIMEText(texto, "plain", "utf-8")
+    mime["To"] = data["from"]
+    mime["From"] = de_email
+    mime["Subject"] = assunto
+    mime["In-Reply-To"] = message_id
+    mime["References"] = message_id
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
+    service.users().messages().send(
+        userId="me", body={"raw": raw, "threadId": data["thread_id"]}
     ).execute()
 
 
-def send_reply(service, email_data: dict, reply_text: str) -> bool:
-    """Responde mantendo a mesma thread/assunto."""
-    reply = MIMEText(reply_text, "plain", "utf-8")
-    reply["To"] = _extract_address(email_data["from"])
-    reply["Subject"] = (
-        email_data["subject"]
-        if email_data["subject"].lower().startswith("re:")
-        else f"Re: {email_data['subject']}"
-    )
-    raw = base64.urlsafe_b64encode(reply.as_bytes()).decode()
-    try:
-        service.users().messages().send(
-            userId="me",
-            body={"raw": raw, "threadId": email_data["thread_id"]},
-        ).execute()
-        return True
-    except Exception as exc:  # noqa: BLE001
-        print(f"[ERRO] Falha ao enviar resposta: {exc}")
-        return False
+def run(dry_run: bool):
+    cfg = settings.load_config()
+    service = build_service()
+    gcfg = cfg["gmail"]
+    label_id = None if dry_run else _get_or_create_label(service)
 
+    query = f"{gcfg.get('query', 'in:inbox')} -label:{LABEL_NOME}"
+    resp = service.users().messages().list(
+        userId="me", q=query, maxResults=int(gcfg.get("max_emails_per_run", 50))
+    ).execute()
+    itens = resp.get("messages", [])
+    print(f"[GMAIL] {len(itens)} e-mail(s) novos para analisar.")
 
-def _extract_address(from_header: str) -> str:
-    """'Nome <a@b.com>' -> 'a@b.com'."""
-    if "<" in from_header and ">" in from_header:
-        return from_header[from_header.index("<") + 1 : from_header.index(">")]
-    return from_header.strip()
+    cont = {"spam_propaganda": 0, "responde_se": 0, "precisa_humano": 0,
+            "acoes": 0, "erros": 0}
 
-
-def process(dry_run: bool = False):
-    config = load_config()
-    gcfg = config["gmail"]
-    acfg = config["automation"]
-    model = config["openai"]["model"]
-
-    print("[1/3] Conectando ao Gmail...")
-    service = gmail_client.build_service()
-
-    print("[2/3] Listando e-mails da caixa de entrada...")
-    ids = fetch_inbox_messages(service, gcfg.get("query", "in:inbox"),
-                               gcfg.get("max_emails_per_run", 50))
-    print(f"      {len(ids)} e-mail(s) para analisar.\n")
-
-    stats = {"spam": 0, "respondido": 0, "alertado": 0, "erro": 0}
-    alerts = []  # acumula avisos p/ mandar 1 WhatsApp resumido
-
-    for i, ref in enumerate(ids, 1):
-        msg = get_message_full(service, ref["id"])
-        data = gmail_client.extract_email_data(msg)
-        analysis = classify_email(data, model=model)
-        cat = analysis["categoria"]
-
-        print(f"--- [{i}/{len(ids)}] DE: {data['from']}")
-        print(f"    ASSUNTO: {data['subject']}")
-        print(f"    CATEGORIA: {cat} | MOTIVO: {analysis['motivo']}")
-
-        if dry_run:
-            print("    [DRY-RUN] nenhuma ação executada.\n")
-            continue
-
+    for item in itens:
         try:
+            msg = service.users().messages().get(
+                userId="me", id=item["id"], format="full").execute()
+            data = extract_email_data(msg)
+            resultado = classify_email(data, cfg)
+            cat = resultado["categoria"]
+            cont[cat] += 1
+            print(f"\n--- De: {data['from']} | Assunto: {data['subject']}")
+            print(f"    categoria: {cat} | motivo: {resultado['motivo']}")
+
+            if dry_run:
+                print("    [DRY-RUN] nenhuma acao executada.")
+                continue
+
             if cat == "spam_propaganda":
-                if acfg.get("auto_delete_spam", True):
-                    delete_message(service, data["id"])
-                    print("    => APAGADO (lixeira)")
+                if cfg["automation"].get("auto_delete_spam"):
+                    service.users().messages().trash(
+                        userId="me", id=data["id"]).execute()
+                    print("    -> movido para a LIXEIRA (recuperavel por 30 dias)")
+                    cont["acoes"] += 1
                 else:
-                    archive_message(service, data["id"])
-                    print("    => ARQUIVADO")
-                stats["spam"] += 1
-
-            elif cat == "responde_se" and analysis.get("resposta"):
-                if acfg.get("auto_reply_enabled", False):
-                    ok = send_reply(service, data, analysis["resposta"])
-                    print(f"    => RESPOSTA AUTOMÁTICA {'ENVIADA' if ok else 'FALHOU'}")
-                    if ok:
-                        stats["respondido"] += 1
-                        archive_message(service, data["id"])
+                    print("    -> spam, mas auto_delete_spam=false: so etiquetado")
+            elif cat == "responde_se":
+                if cfg["automation"].get("auto_reply_enabled") and resultado.get("resposta"):
+                    _send_reply(service, data, msg, resultado["resposta"],
+                                cfg["automation"].get("notify_email", ""))
+                    print("    -> resposta automatica enviada na thread")
+                    cont["acoes"] += 1
                 else:
-                    print("    => Resposta gerada, mas auto_reply_enabled=false; só arquivando.")
-                    archive_message(service, data["id"])
+                    print("    -> responde_se, mas resposta automatica desativada")
+            else:  # precisa_humano
+                aviso = (
+                    f"🙋 PRECISA DE VOCE\n"
+                    f"De: {data['from']}\n"
+                    f"Assunto: {data['subject']}\n"
+                    f"{resultado.get('resumo_para_whatsapp') or resultado['motivo']}"
+                )
+                if send_whatsapp(cfg, aviso):
+                    cont["acoes"] += 1
+                else:
+                    print("    [AVISO] falha ao notificar WhatsApp")
 
-            elif cat == "precisa_humano":
-                resumo = analysis.get("resumo_para_whatsapp") or f"{data['from']} - {data['subject']}"
-                alerts.append(f"• De: {data['from']}\n  Assunto: {data['subject']}\n  {resumo}")
-                # marca como lida para não reprocessar no próximo ciclo
-                service.users().messages().modify(
-                    userId="me", id=data["id"], body={"removeLabelIds": ["UNREAD"]}
-                ).execute()
-                stats["alertado"] += 1
-                print("    => ALERTA separado para WhatsApp")
-
+            _apply_label(service, data["id"], label_id)
+        except HttpError as exc:
+            cont["erros"] += 1
+            print(f"    [ERRO] Gmail: {exc}")
         except Exception as exc:  # noqa: BLE001
-            print(f"    [ERRO] {exc}")
-            stats["erro"] += 1
-        print()
+            cont["erros"] += 1
+            print(f"    [ERRO] inesperado: {exc}")
 
-    # Envia UM único WhatsApp consolidado com todos os assuntos que precisam do usuário
-    if alerts and not dry_run:
-        body = "📬 *E-mails que precisam da sua atenção:*\n\n" + "\n\n".join(alerts)
-        send_whatsapp(config, body)
-
-    print("=" * 50)
-    print(f"RESUMO: apagados/arquivados={stats['spam']} | respondidos={stats['respondido']} | "
-          f"alertados via WhatsApp={stats['alertado']} | erros={stats['erro']}")
+    print("\n===== RESUMO DA EXECUCAO =====")
+    print(f"spam_propaganda: {cont['spam_propaganda']} | "
+          f"responde_se: {cont['responde_se']} | "
+          f"precisa_humano: {cont['precisa_humano']}")
+    print(f"acoes executadas: {cont['acoes']} | erros: {cont['erros']}")
+    print(f"modo: {'DRY-RUN (nada foi alterado)' if dry_run else 'PRODUCAO'}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Automação de e-mail Gmail + WhatsApp")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Analisa os e-mails sem apagar/responder/notificar")
-    args = parser.parse_args()
-    try:
-        process(dry_run=args.dry_run)
-    except FileNotFoundError as exc:
-        sys.exit(str(exc))
+    run("--dry-run" in sys.argv)

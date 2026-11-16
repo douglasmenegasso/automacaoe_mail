@@ -1,18 +1,24 @@
 """Roteador de IA com failover: Gemini -> Groq -> (heurística no analyzer).
 
-Usa o SDK da OpenAI apontando para os endpoints compatíveis de cada provedor.
 A ordem e os modelos vêm do config.json (bloco "ai"), então trocar de modelo
 no futuro = editar 1 linha do config, sem mexer em código.
+
+Política de novas tentativas:
+- Erro de cota (429): NAO repete (cota só volta no dia seguinte) -> pula pro próximo.
+- Erro passageiro (rede, 5xx, timeout): 1 nova tentativa após 3s antes de trocar.
+- Todos falharam: o analyzer cai na heurística local (que nunca falha).
 """
 
 import json
 import os
 import re
+import time
 
 from openai import OpenAI
 
 # Provedores que estouraram a cota NESTA execução (não tenta de novo neles)
 _esgotados = set()
+PAUSA_RETRY_SEGUNDOS = 3
 
 
 class SemProvedorError(Exception):
@@ -48,6 +54,24 @@ def _extrair_json(texto: str):
     raise ValueError("Resposta da IA nao contem JSON valido")
 
 
+def _chamar_provedor(p: dict, system_prompt: str, user_prompt: str, timeout: int) -> str:
+    client = OpenAI(
+        api_key=os.environ.get(p.get("api_key_env", ""), ""),
+        base_url=p["base_url"],
+        timeout=timeout,
+        max_retries=0,  # quem cuida das tentativas somos nós, não o SDK
+    )
+    resp = client.chat.completions.create(
+        model=p["model"],
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content or ""
+
+
 def chat(system_prompt: str, user_prompt: str, config: dict) -> str:
     """Tenta cada provedor em ordem e devolve o texto da resposta."""
     ai_cfg = config.get("ai", {})
@@ -61,43 +85,35 @@ def chat(system_prompt: str, user_prompt: str, config: dict) -> str:
     for p in providers:
         nome = p.get("name", "?")
         if nome in _esgotados:
-            continue  # ja estourou cota nesta execucao, pula direto
+            continue  # já estourou cota nesta execução, pula direto
 
-        chave = os.environ.get(p.get("api_key_env", ""), "")
-        if not chave:
+        if not os.environ.get(p.get("api_key_env", ""), ""):
             print(f"[IA] {nome}: chave ausente ({p.get('api_key_env')}) -> pulando")
             erros.append(f"{nome}: chave ausente")
             continue
 
-        try:
-            client = OpenAI(
-                api_key=chave,
-                base_url=p["base_url"],
-                timeout=timeout,
-                max_retries=0,  # sem retries: falhou, vai pro proximo na hora
-            )
-            resp = client.chat.completions.create(
-                model=p["model"],
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-            )
-            texto = resp.choices[0].message.content or ""
-            print(f"[IA] {nome} OK")
-            return texto
-        except Exception as exc:
-            if _eh_erro_de_cota(exc):
-                _esgotados.add(nome)
-                print(f"[IA] {nome} sem cota (429) -> pulando pelo resto da execucao")
-            else:
-                print(f"[IA] {nome} falhou: {str(exc)[:160]}")
-            erros.append(f"{nome}: {str(exc)[:160]}")
+        for tentativa in (1, 2):
+            try:
+                texto = _chamar_provedor(p, system_prompt, user_prompt, timeout)
+                print(f"[IA] {nome} OK")
+                return texto
+            except Exception as exc:
+                if _eh_erro_de_cota(exc):
+                    _esgotados.add(nome)
+                    print(f"[IA] {nome} sem cota (429) -> pulando pelo resto da execução")
+                    erros.append(f"{nome}: cota esgotada")
+                    break  # repetir não adianta: cota só volta no outro dia
+                if tentativa == 1:
+                    print(f"[IA] {nome} falhou ({str(exc)[:80]}); "
+                          f"nova tentativa em {PAUSA_RETRY_SEGUNDOS}s...")
+                    time.sleep(PAUSA_RETRY_SEGUNDOS)
+                    continue
+                print(f"[IA] {nome} falhou de novo: {str(exc)[:160]}")
+                erros.append(f"{nome}: {str(exc)[:160]}")
 
     raise SemProvedorError("Todos os provedores falharam: " + " | ".join(erros))
 
 
 def chat_json(system_prompt: str, user_prompt: str, config: dict) -> dict:
-    """Igual ao chat(), mas ja devolve o JSON parseado (uso do analyzer)."""
+    """Igual ao chat(), mas já devolve o JSON parseado (uso do analyzer)."""
     return _extrair_json(chat(system_prompt, user_prompt, config))

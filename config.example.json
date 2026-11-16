@@ -5,12 +5,25 @@
     "max_emails_per_run": 50,
     "query": "in:inbox"
   },
-  "openai": {
-    "model": "gpt-4o-mini",
-    "api_key_env": "OPENAI_API_KEY"
+  "ai": {
+    "timeout_seconds": 30,
+    "providers": [
+      {
+        "name": "gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "model": "gemini-2.5-flash",
+        "api_key_env": "GEMINI_API_KEY"
+      },
+      {
+        "name": "groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "api_key_env": "GROQ_API_KEY"
+      }
+    ]
   },
   "whatsapp": {
-    "provider": "twilio",
+    "provider": "console",
     "twilio": {
       "account_sid_env": "TWILIO_ACCOUNT_SID",
       "auth_token_env": "TWILIO_AUTH_TOKEN",
@@ -31,9 +44,9 @@
     }
   },
   "automation": {
-    "auto_delete_spam": true,
+    "auto_delete_spam": false,
     "auto_reply_enabled": false,
-    "notify_email": "meuemail@gmail.com",
+    "notify_email": "douglas.menegasso@gmail.com",
     "language": "portuguese"
   }
 }

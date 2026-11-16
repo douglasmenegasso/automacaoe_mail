@@ -1,0 +1,89 @@
+# Automação de e-mail: lê Gmail, apaga spam/propaganda, responde quando seguro
+# e avisa no WhatsApp quando precisar de você.
+#
+# Agendamento: 2ª a 6ª às 08:00 e 18:00 (horário de Brasília = UTC-3 -> 11:00 e 21:00 UTC)
+name: automail
+
+on:
+  schedule:
+    - cron: "0 11,21 * * 1-5"   # 08:00 e 18:00 (Brasília), dias úteis
+  workflow_dispatch:            # permite rodar manualmente pelo botão "Run workflow"
+    inputs:
+      dry_run:
+        description: "Modo de teste (--dry-run, não apaga nem envia nada)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automail
+  cancel-in-progress: false
+
+jobs:
+  processar-emails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Criar config.json
+        env:
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
+        run: |
+          if [ -z "$CONFIG_JSON" ]; then
+            echo "ERRO: configure o secret CONFIG_JSON (copie config.example.json)." >&2
+            exit 1
+          fi
+          printf "%s\n" "$CONFIG_JSON" > config.json
+
+      - name: Restaurar token do Gmail (OAuth)
+        env:
+          GMAIL_TOKEN_B64: ${{ secrets.GMAIL_TOKEN_B64 }}
+        run: |
+          if [ -z "$GMAIL_TOKEN_B64" ]; then
+            echo "ERRO: rode 'python gmail_client.py --login' na sua máquina," >&2
+            echo "depois gere o secret: base64 -w0 token.json" >&2
+            exit 1
+          fi
+          printf "%s" "$GMAIL_TOKEN_B64" | base64 -d > token.json
+
+      - name: Executar automação
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          META_WA_ACCESS_TOKEN: ${{ secrets.META_WA_ACCESS_TOKEN }}
+          META_WA_PHONE_NUMBER_ID: ${{ secrets.META_WA_PHONE_NUMBER_ID }}
+          INFOBIP_API_KEY: ${{ secrets.INFOBIP_API_KEY }}
+        run: |
+          ARGS=""
+          # Modo de teste se: acionado manualmente com dry_run=true
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="--dry-run"
+          elif [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY ausente — abortando (sem IA não há classificação)." >&2
+            exit 1
+          fi
+          python main.py $ARGS
+
+      - name: Mostrar token renovado do Gmail (para atualizar o secret)
+        if: always()
+        run: |
+          # O Google renova o access_token; se token.json mudou, imprime o novo valor
+          # para você atualizar o secret GMAIL_TOKEN_B64 (recomendado a cada ~6 meses).
+          if [ -f token.json ]; then
+            echo "=== Token atual (copie p/ atualizar o secret GMAIL_TOKEN_B64 se necessário) ==="
+            base64 -w0 token.json
+          fi

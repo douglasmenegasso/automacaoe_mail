@@ -35,7 +35,31 @@ Recomendação prática: comece **no seu computador** (seco/cron local) até con
 nas classificações; depois migre para **GitHub Actions** ou **Cloud Run** para
 rodar 24/7 sem depender da sua máquina.
 
-## Passo a passo de instalação
+## ☁️ Hospedagem no GitHub Actions (configurado neste repositório)
+
+O repositório já inclui o workflow [`.github/workflows/automail.yml`](.github/workflows/automail.yml), que roda a automação automaticamente **2ª a 6ª às 08:00 e 18:00 (Brasília)**, sem servidor.
+
+**Passo a passo:**
+
+1. Autorize o Gmail **uma vez na sua máquina**: `python gmail_client.py --login` (gera `token.json`).
+2. Gere o token em base64: `base64 -w0 token.json` (Linux/macOS).
+3. No GitHub → repositório → **Settings → Secrets and variables → Actions → New repository secret**, crie:
+
+| Secret | Obrigatório | Conteúdo |
+|---|---|---|
+| `GMAIL_TOKEN_B64` | ✅ | Resultado do `base64 -w0 token.json` |
+| `CONFIG_JSON` | ✅ | Conteúdo inteiro do seu `config.json` |
+| `OPENAI_API_KEY` | ✅ | Chave da OpenAI |
+| `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` | se provider=twilio | Credenciais Twilio |
+| `META_WA_ACCESS_TOKEN` + `META_WA_PHONE_NUMBER_ID` | se provider=meta | WhatsApp Cloud API (grátis) |
+| `INFOBIP_API_KEY` | se provider=infobip | Credencial Infobip |
+
+4. Teste sem efeitos colaterais: **Actions → automail → Run workflow → marque `dry_run`**.
+5. Para rodar de verdade manualmente: mesmo botão com `dry_run` desmarcado.
+
+> ⚠️ **Nunca commite** `credentials.json`, `token.json`, `config.json` nem chaves de API — eles já estão no `.gitignore`. As credenciais vivem apenas nos Secrets do GitHub.
+
+## Passo a passo de instalação (local)
 
 ### 1. Instalar dependências
 ```bash

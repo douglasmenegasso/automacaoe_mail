@@ -1,15 +1,16 @@
-"""Classificação e análise de e-mails usando LLM (OpenAI).
+"""Classificação e análise de e-mails usando LLM com failover (Gemini -> Groq).
 
 Categorias:
 - spam_propaganda : propaganda, newsletters, promoções, spam -> apagar/arquivar
 - responde_se      : dá para responder automaticamente (confirmação, agradecimento, FAQ simples)
 - precisa_humano   : exige decisão/informação do dono da caixa -> avisar por WhatsApp
+
+A chamada de IA passa pelo ai_router (Gemini -> Groq). Se todos os provedores
+falharem, usa a heurística local (sem IA) como último recurso.
 """
-import json
-import os
 import re
 
-from openai import OpenAI
+from ai_router import chat_json
 
 SYSTEM_PROMPT = """Você é um assistente que analisa e-mails em nome do usuário.
 Responda SEMPRE apenas com JSON válido, no formato:
@@ -27,15 +28,16 @@ Regras:
 - Se houver dúvida sobre segurança ou conteúdo suspeito/pishing => precisa_humano."""
 
 
-def _get_client() -> OpenAI:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("[ERRO] Defina a variável de ambiente OPENAI_API_KEY.")
-    return OpenAI(api_key=api_key)
+def classify_email(email: dict, config=None, **_legado) -> dict:
+    """Retorna dict com categoria, motivo, resposta e resumo para WhatsApp.
 
+    config: dict completo do config.json (o roteador usa o bloco "ai").
+    **_legado: engole argumentos do formato antigo (ex.: model="gpt-4o-mini")
+    para nao quebrar enquanto o main.py nao for atualizado.
+    """
+    if not isinstance(config, dict):
+        config = {}
 
-def classify_email(email: dict, model: str = "gpt-4o-mini") -> dict:
-    """Retorna dict com categoria, motivo, resposta e resumo para WhatsApp."""
     user_prompt = (
         f"DE: {email['from']}\n"
         f"ASSUNTO: {email['subject']}\n"
@@ -43,16 +45,7 @@ def classify_email(email: dict, model: str = "gpt-4o-mini") -> dict:
         f"CORPO:\n{email['body'] or email['snippet']}"
     )
     try:
-        resp = _get_client().chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
-        result = json.loads(resp.choices[0].message.content)
+        result = chat_json(SYSTEM_PROMPT, user_prompt, config)
     except Exception as exc:  # noqa: BLE001
         print(f"[AVISO] Falha na análise por IA ({exc}); usando heurística local.")
         result = _heuristic_classify(email)

@@ -6,6 +6,7 @@ Uso:
 """
 import base64
 import sys
+import time
 from email.mime.text import MIMEText
 
 from googleapiclient.errors import HttpError
@@ -66,6 +67,7 @@ def run(dry_run: bool):
     cfg = settings.load_config()
     service = build_service()
     gcfg = cfg["gmail"]
+    pausa = cfg.get("ai", {}).get("pausa_entre_emails", 4)
     label_id = None if dry_run else _get_or_create_label(service)
 
     query = f"{gcfg.get('query', 'in:inbox')} -label:{LABEL_NOME}"
@@ -78,7 +80,7 @@ def run(dry_run: bool):
     cont = {"spam_propaganda": 0, "responde_se": 0, "precisa_humano": 0,
             "acoes": 0, "erros": 0}
 
-    for item in itens:
+    for idx, item in enumerate(itens):
         try:
             msg = service.users().messages().get(
                 userId="me", id=item["id"], format="full").execute()
@@ -91,43 +93,44 @@ def run(dry_run: bool):
 
             if dry_run:
                 print("    [DRY-RUN] nenhuma acao executada.")
-                continue
-
-            if cat == "spam_propaganda":
-                if cfg["automation"].get("auto_delete_spam"):
-                    service.users().messages().trash(
-                        userId="me", id=data["id"]).execute()
-                    print("    -> movido para a LIXEIRA (recuperavel por 30 dias)")
-                    cont["acoes"] += 1
-                else:
-                    print("    -> spam, mas auto_delete_spam=false: so etiquetado")
-            elif cat == "responde_se":
-                if cfg["automation"].get("auto_reply_enabled") and resultado.get("resposta"):
-                    _send_reply(service, data, msg, resultado["resposta"],
-                                cfg["automation"].get("notify_email", ""))
-                    print("    -> resposta automatica enviada na thread")
-                    cont["acoes"] += 1
-                else:
-                    print("    -> responde_se, mas resposta automatica desativada")
-            else:  # precisa_humano
-                aviso = (
-                    f"🙋 PRECISA DE VOCE\n"
-                    f"De: {data['from']}\n"
-                    f"Assunto: {data['subject']}\n"
-                    f"{resultado.get('resumo_para_whatsapp') or resultado['motivo']}"
-                )
-                if send_whatsapp(cfg, aviso):
-                    cont["acoes"] += 1
-                else:
-                    print("    [AVISO] falha ao notificar WhatsApp")
-
-            _apply_label(service, data["id"], label_id)
+            else:
+                if cat == "spam_propaganda":
+                    if cfg["automation"].get("auto_delete_spam"):
+                        service.users().messages().trash(
+                            userId="me", id=data["id"]).execute()
+                        print("    -> movido para a LIXEIRA (recuperavel por 30 dias)")
+                        cont["acoes"] += 1
+                    else:
+                        print("    -> spam, mas auto_delete_spam=false: so etiquetado")
+                elif cat == "responde_se":
+                    if cfg["automation"].get("auto_reply_enabled") and resultado.get("resposta"):
+                        _send_reply(service, data, msg, resultado["resposta"],
+                                    cfg["automation"].get("notify_email", ""))
+                        print("    -> resposta automatica enviada na thread")
+                        cont["acoes"] += 1
+                    else:
+                        print("    -> responde_se, mas resposta automatica desativada")
+                else:  # precisa_humano
+                    aviso = (
+                        f"🙋 PRECISA DE VOCE\n"
+                        f"De: {data['from']}\n"
+                        f"Assunto: {data['subject']}\n"
+                        f"{resultado.get('resumo_para_whatsapp') or resultado['motivo']}"
+                    )
+                    if send_whatsapp(cfg, aviso):
+                        cont["acoes"] += 1
+                    else:
+                        print("    [AVISO] falha ao notificar WhatsApp")
+                _apply_label(service, data["id"], label_id)
         except HttpError as exc:
             cont["erros"] += 1
             print(f"    [ERRO] Gmail: {exc}")
         except Exception as exc:  # noqa: BLE001
             cont["erros"] += 1
             print(f"    [ERRO] inesperado: {exc}")
+
+        if idx < len(itens) - 1:
+            time.sleep(pausa)  # ritmo constante: nao estoura o limite por minuto
 
     print("\n===== RESUMO DA EXECUCAO =====")
     print(f"spam_propaganda: {cont['spam_propaganda']} | "

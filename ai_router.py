@@ -1,8 +1,10 @@
 """Roteador de IA com failover: Gemini -> Gemini3 -> Groq -> (heurística no analyzer).
 
 Politica de novas tentativas:
-- Cota esgotada (429) ou modelo morto (404): NAO repete -> pula pro próximo provedor.
-- Erro passageiro (rede, 5xx, timeout): 1 nova tentativa apos 3s antes de trocar.
+- Modelo morto (404): pula o provedor na hora.
+- Cota DIARIA esgotada (429 'per day'): pula o provedor pelo resto da execucao.
+- Limite por MINUTO (429 comum): aguarda 65s (a janela reinicia) e tenta 1 vez.
+- Erro passageiro (rede, 5xx, timeout): 1 nova tentativa apos 3s.
 - Todos falharam: o analyzer cai na heuristica local (que nunca falha).
 """
 
@@ -15,29 +17,36 @@ from openai import OpenAI
 
 _esgotados = set()
 PAUSA_RETRY_SEGUNDOS = 3
+PAUSA_JANELA_SEGUNDOS = 65
 
 
 class SemProvedorError(Exception):
     """Todos os provedores de IA falharam (o analyzer deve cair na heurística)."""
 
 
-def _eh_erro_de_cota(exc) -> bool:
-    msg = str(exc).lower()
-    status = getattr(exc, "status_code", None)
+def _msg(exc) -> str:
+    return str(exc).lower()
+
+
+def _eh_429(exc) -> bool:
     return (
-        status == 429
-        or "429" in msg
-        or "resource_exhausted" in msg
-        or "quota" in msg
-        or "rate limit" in msg
-        or "rate_limit" in msg
+        getattr(exc, "status_code", None) == 429
+        or "429" in _msg(exc)
+        or "rate limit" in _msg(exc)
+        or "resource_exhausted" in _msg(exc)
     )
 
 
+def _eh_cota_diaria(exc) -> bool:
+    return _eh_429(exc) and ("per day" in _msg(exc) or "daily" in _msg(exc))
+
+
 def _eh_erro_de_modelo(exc) -> bool:
-    msg = str(exc).lower()
-    status = getattr(exc, "status_code", None)
-    return status == 404 or "does not exist" in msg or "not found" in msg
+    return (
+        getattr(exc, "status_code", None) == 404
+        or "does not exist" in _msg(exc)
+        or "not found" in _msg(exc)
+    )
 
 
 def _extrair_json(texto: str):
@@ -87,7 +96,7 @@ def chat(system_prompt: str, user_prompt: str, config: dict) -> str:
     for p in providers:
         nome = p.get("name", "?")
         if nome in _esgotados:
-            continue  # já falhou por cota/modelo nesta execução, pula direto
+            continue
 
         if not os.environ.get(p.get("api_key_env", ""), ""):
             print(f"[IA] {nome}: chave ausente ({p.get('api_key_env')}) -> pulando")
@@ -100,15 +109,25 @@ def chat(system_prompt: str, user_prompt: str, config: dict) -> str:
                 print(f"[IA] {nome} OK")
                 return texto
             except Exception as exc:
-                if _eh_erro_de_cota(exc):
-                    _esgotados.add(nome)
-                    print(f"[IA] {nome} sem cota (429) -> pulando pelo resto da execução")
-                    erros.append(f"{nome}: cota esgotada")
-                    break
                 if _eh_erro_de_modelo(exc):
                     _esgotados.add(nome)
-                    print(f"[IA] {nome} modelo indisponível (404) -> pulando pelo resto da execução")
+                    print(f"[IA] {nome} modelo indisponível (404) -> pulando provedor")
                     erros.append(f"{nome}: modelo indisponível")
+                    break
+                if _eh_cota_diaria(exc):
+                    _esgotados.add(nome)
+                    print(f"[IA] {nome} cota DIÁRIA esgotada -> pulando provedor")
+                    erros.append(f"{nome}: cota diária")
+                    break
+                if _eh_429(exc):
+                    if tentativa == 1:
+                        print(f"[IA] {nome}: limite por minuto (429); "
+                              f"aguardando {PAUSA_JANELA_SEGUNDOS}s p/ janela reiniciar...")
+                        time.sleep(PAUSA_JANELA_SEGUNDOS)
+                        continue
+                    _esgotados.add(nome)
+                    print(f"[IA] {nome} ainda sem vaga por minuto -> pulando provedor")
+                    erros.append(f"{nome}: limite por minuto")
                     break
                 if tentativa == 1:
                     print(f"[IA] {nome} falhou ({str(exc)[:80]}); "

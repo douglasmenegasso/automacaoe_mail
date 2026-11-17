@@ -1,12 +1,9 @@
-"""Roteador de IA com failover: Gemini -> Groq -> (heurística no analyzer).
+"""Roteador de IA com failover: Gemini -> Gemini3 -> Groq -> (heurística no analyzer).
 
-A ordem e os modelos vêm do config.json (bloco "ai"), então trocar de modelo
-no futuro = editar 1 linha do config, sem mexer em código.
-
-Política de novas tentativas:
-- Erro de cota (429): NAO repete (cota só volta no dia seguinte) -> pula pro próximo.
-- Erro passageiro (rede, 5xx, timeout): 1 nova tentativa após 3s antes de trocar.
-- Todos falharam: o analyzer cai na heurística local (que nunca falha).
+Politica de novas tentativas:
+- Cota esgotada (429) ou modelo morto (404): NAO repete -> pula pro próximo provedor.
+- Erro passageiro (rede, 5xx, timeout): 1 nova tentativa apos 3s antes de trocar.
+- Todos falharam: o analyzer cai na heuristica local (que nunca falha).
 """
 
 import json
@@ -16,7 +13,6 @@ import time
 
 from openai import OpenAI
 
-# Provedores que estouraram a cota NESTA execução (não tenta de novo neles)
 _esgotados = set()
 PAUSA_RETRY_SEGUNDOS = 3
 
@@ -36,6 +32,12 @@ def _eh_erro_de_cota(exc) -> bool:
         or "rate limit" in msg
         or "rate_limit" in msg
     )
+
+
+def _eh_erro_de_modelo(exc) -> bool:
+    msg = str(exc).lower()
+    status = getattr(exc, "status_code", None)
+    return status == 404 or "does not exist" in msg or "not found" in msg
 
 
 def _extrair_json(texto: str):
@@ -85,7 +87,7 @@ def chat(system_prompt: str, user_prompt: str, config: dict) -> str:
     for p in providers:
         nome = p.get("name", "?")
         if nome in _esgotados:
-            continue  # já estourou cota nesta execução, pula direto
+            continue  # já falhou por cota/modelo nesta execução, pula direto
 
         if not os.environ.get(p.get("api_key_env", ""), ""):
             print(f"[IA] {nome}: chave ausente ({p.get('api_key_env')}) -> pulando")
@@ -102,7 +104,12 @@ def chat(system_prompt: str, user_prompt: str, config: dict) -> str:
                     _esgotados.add(nome)
                     print(f"[IA] {nome} sem cota (429) -> pulando pelo resto da execução")
                     erros.append(f"{nome}: cota esgotada")
-                    break  # repetir não adianta: cota só volta no outro dia
+                    break
+                if _eh_erro_de_modelo(exc):
+                    _esgotados.add(nome)
+                    print(f"[IA] {nome} modelo indisponível (404) -> pulando pelo resto da execução")
+                    erros.append(f"{nome}: modelo indisponível")
+                    break
                 if tentativa == 1:
                     print(f"[IA] {nome} falhou ({str(exc)[:80]}); "
                           f"nova tentativa em {PAUSA_RETRY_SEGUNDOS}s...")

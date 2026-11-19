@@ -18,15 +18,44 @@ from whatsapp_notifier import send_whatsapp
 
 LABEL_NOME = "AutoMail"
 
+# Emoji por tipo de pasta (aparece no alerta do WhatsApp)
+_EMOJI_PASTA = {
+    "Seguranca": "🔒",
+    "Financeiro": "💰",
+    "Bancos": "🏦",
+    "Vagas": "💼",
+    "Pessoal": "👤",
+    "Contas": "🧾",
+    "Fornecedores": "📦",
+    "Trabalho": "🛠️",
+    "Outros": "📁",
+    "Atencao": "🙋",
+}
+
+
+def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> str:
+    """Monta o alerta do WhatsApp com visual de produto (negrito + divisor)."""
+    assunto = data["subject"]
+    if len(assunto) > 80:
+        assunto = assunto[:77] + "..."
+    resumo = (resultado.get("resumo_para_whatsapp") or resultado["motivo"]).strip()
+    return (
+        f"{emoji} *{pasta_nome.upper()}*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"*De:* {data['from']}\n"
+        f"*Assunto:* {assunto}\n\n"
+        f"{resumo}"
+    )
+
 
 def _get_or_create_label_path(service, label_path: str) -> str:
     """Garante que o label (e seus pais, se houver '/') exista e retorna o ID."""
     resp = service.users().labels().list(userId="me").execute()
     existing = {lb["name"].lower(): lb["id"] for lb in resp.get("labels", [])}
-    
+
     if label_path.lower() in existing:
         return existing[label_path.lower()]
-    
+
     # Se for subpasta (ex: AutoMail/Spam), garante que o pai (AutoMail) exista primeiro
     if "/" in label_path:
         parent_name = label_path.split("/")[0]
@@ -35,7 +64,7 @@ def _get_or_create_label_path(service, label_path: str) -> str:
                 userId="me",
                 body={"name": parent_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
             ).execute()
-            
+
     # Cria o label final (o Gmail entende a barra '/' e aninha automaticamente)
     novo = service.users().labels().create(
         userId="me",
@@ -136,17 +165,14 @@ def run(dry_run: bool):
                     else:
                         print("    -> responde_se, mas resposta automatica desativada")
                 else:  # precisa_humano
-                    aviso = (
-                        f"🙋 PRECISA DE VOCE\n"
-                        f"De: {data['from']}\n"
-                        f"Assunto: {data['subject']}\n"
-                        f"{resultado.get('resumo_para_whatsapp') or resultado['motivo']}"
-                    )
+                    pasta_nome = label_alvo.split("/")[-1]
+                    emoji = _EMOJI_PASTA.get(pasta_nome, "📁")
+                    aviso = _format_alerta(data, resultado, pasta_nome, emoji)
                     if send_whatsapp(cfg, aviso):
                         cont["acoes"] += 1
                     else:
                         print("    [AVISO] falha ao notificar WhatsApp")
-                
+
                 # Aplica a sub-etiqueta específica
                 label_id_alvo = _get_or_create_label_path(service, label_alvo)
                 _apply_label(service, data["id"], label_id_alvo)

@@ -27,7 +27,8 @@ Regras:
 - Pedidos simples que não exigem informação pessoal (confirmar recebimento, agradecer, agendar algo já proposto com data livre?) NÃO responda sozinho se depender de agenda/dados do usuário => precisa_humano
 - Respostas automáticas devem ser educadas, curtas e genéricas, nunca inventar dados (datas, valores, endereços).
 - Se houver dúvida sobre segurança ou conteúdo suspeito/pishing => precisa_humano.
-- Quando categoria for precisa_humano, SEMPRE preencha pasta_sugerida com uma das palavras da lista (sem acentos, sem espaços). Quando categoria for spam_propaganda ou responde_se, pasta_sugerida deve ser null."""
+- Quando categoria for precisa_humano, SEMPRE preencha pasta_sugerida com uma das palavras da lista (sem acentos, sem espaços). Quando categoria for spam_propaganda ou responde_se, pasta_sugerida deve ser null.
+- NOTIFICAÇÕES DE CONTROLE PARENTAL (Google Family Link, apps instalados no dispositivo de um dependente, login de menor de idade, "O app X foi instalado no dispositivo da [nome]", "A [nome] fez login") => SEMPRE precisa_humano com pasta_sugerida "Pessoal". O responsável precisa decidir se permite, bloqueia ou define limites. NUNCA classifique como spam."""
 
 
 def classify_email(email: dict, config=None, **_legado) -> dict:
@@ -70,9 +71,23 @@ _SPAM_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# E-mails de controle parental: SEMPRE precisam de você (nunca spam)
+_FAMILY_LINK_PATTERNS = re.compile(
+    r"(foi instalado no dispositivo|fez login no dispositivo|family link|controle parental)",
+    re.IGNORECASE,
+)
+
 
 def _heuristic_classify(email: dict) -> dict:
     text = f"{email['subject']} {email['body']} {email['snippet']}"
+    if _FAMILY_LINK_PATTERNS.search(text):
+        return {
+            "categoria": "precisa_humano",
+            "motivo": "Heurística: notificação de controle parental exige atenção do responsável.",
+            "resposta": None,
+            "resumo_para_whatsapp": f"E-mail de {email['from']} - Assunto: {email['subject']}",
+            "pasta_sugerida": "Pessoal",
+        }
     if _SPAM_PATTERNS.search(text):
         return {
             "categoria": "spam_propaganda",

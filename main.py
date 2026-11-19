@@ -8,6 +8,7 @@ import base64
 import sys
 import time
 from email.mime.text import MIMEText
+from datetime import datetime
 
 from googleapiclient.errors import HttpError
 
@@ -33,17 +34,34 @@ _EMOJI_PASTA = {
 }
 
 
+def _formatar_data(data_str: str) -> str:
+    """Converte a data do e-mail (RFC2822) para '19/11/2026 01:32'."""
+    if not data_str:
+        return ""
+    try:
+        # Tenta parsear formato padrão de e-mail
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(data_str)
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        # Se falhar, retorna a string original truncada
+        return data_str[:20]
+
+
 def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> str:
     """Monta o alerta do WhatsApp com visual de produto (negrito + divisor)."""
     assunto = data["subject"]
     if len(assunto) > 80:
         assunto = assunto[:77] + "..."
     resumo = (resultado.get("resumo_para_whatsapp") or resultado["motivo"]).strip()
+    data_formatada = _formatar_data(data.get("date", ""))
+    
     return (
         f"{emoji} *{pasta_nome.upper()}*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"*De:* {data['from']}\n"
-        f"*Assunto:* {assunto}\n\n"
+        f"*Assunto:* {assunto}\n"
+        f"*Data:* {data_formatada}\n\n"
         f"{resumo}"
     )
 
@@ -56,7 +74,6 @@ def _get_or_create_label_path(service, label_path: str) -> str:
     if label_path.lower() in existing:
         return existing[label_path.lower()]
 
-    # Se for subpasta (ex: AutoMail/Spam), garante que o pai (AutoMail) exista primeiro
     if "/" in label_path:
         parent_name = label_path.split("/")[0]
         if parent_name.lower() not in existing:
@@ -65,7 +82,6 @@ def _get_or_create_label_path(service, label_path: str) -> str:
                 body={"name": parent_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
             ).execute()
 
-    # Cria o label final (o Gmail entende a barra '/' e aninha automaticamente)
     novo = service.users().labels().create(
         userId="me",
         body={"name": label_path, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
@@ -131,15 +147,13 @@ def run(dry_run: bool):
             print(f"\n--- De: {data['from']} | Assunto: {data['subject']}")
             print(f"    categoria: {cat} | motivo: {resultado['motivo']}")
 
-            # Define qual subpasta será usada
             if cat == "spam_propaganda":
                 label_alvo = "AutoMail/Spam"
             elif cat == "responde_se":
                 label_alvo = "AutoMail/Respostas"
-            else:  # precisa_humano
+            else:
                 pasta_sugerida = resultado.get("pasta_sugerida", "").strip()
                 if pasta_sugerida:
-                    # Limpa o nome sugerido para evitar erros na API do Gmail
                     pasta_limpa = "".join(c for c in pasta_sugerida if c.isalnum() or c in (' ', '-', '_')).strip()
                     label_alvo = f"AutoMail/{pasta_limpa}"
                 else:
@@ -164,7 +178,7 @@ def run(dry_run: bool):
                         cont["acoes"] += 1
                     else:
                         print("    -> responde_se, mas resposta automatica desativada")
-                else:  # precisa_humano
+                else:
                     pasta_nome = label_alvo.split("/")[-1]
                     emoji = _EMOJI_PASTA.get(pasta_nome, "📁")
                     aviso = _format_alerta(data, resultado, pasta_nome, emoji)
@@ -173,18 +187,17 @@ def run(dry_run: bool):
                     else:
                         print("    [AVISO] falha ao notificar WhatsApp")
 
-                # Aplica a sub-etiqueta específica
                 label_id_alvo = _get_or_create_label_path(service, label_alvo)
                 _apply_label(service, data["id"], label_id_alvo)
         except HttpError as exc:
             cont["erros"] += 1
             print(f"    [ERRO] Gmail: {exc}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             cont["erros"] += 1
             print(f"    [ERRO] inesperado: {exc}")
 
         if idx < len(itens) - 1:
-            time.sleep(pausa)  # ritmo constante: nao estoura o limite por minuto
+            time.sleep(pausa)
 
     print("\n===== RESUMO DA EXECUCAO =====")
     print(f"spam_propaganda: {cont['spam_propaganda']} | "

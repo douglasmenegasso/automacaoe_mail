@@ -19,17 +19,29 @@ from whatsapp_notifier import send_whatsapp
 LABEL_NOME = "AutoMail"
 
 
-def _get_or_create_label(service) -> str:
+def _get_or_create_label_path(service, label_path: str) -> str:
+    """Garante que o label (e seus pais, se houver '/') exista e retorna o ID."""
     resp = service.users().labels().list(userId="me").execute()
-    for lb in resp.get("labels", []):
-        if lb["name"].lower() == LABEL_NOME.lower():
-            return lb["id"]
+    existing = {lb["name"].lower(): lb["id"] for lb in resp.get("labels", [])}
+    
+    if label_path.lower() in existing:
+        return existing[label_path.lower()]
+    
+    # Se for subpasta (ex: AutoMail/Spam), garante que o pai (AutoMail) exista primeiro
+    if "/" in label_path:
+        parent_name = label_path.split("/")[0]
+        if parent_name.lower() not in existing:
+            service.users().labels().create(
+                userId="me",
+                body={"name": parent_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
+            ).execute()
+            
+    # Cria o label final (o Gmail entende a barra '/' e aninha automaticamente)
     novo = service.users().labels().create(
         userId="me",
-        body={"name": LABEL_NOME, "labelListVisibility": "labelShow",
-              "messageListVisibility": "show"},
+        body={"name": label_path, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
     ).execute()
-    print(f"[GMAIL] Label {LABEL_NOME} criada.")
+    print(f"[GMAIL] Label '{label_path}' criada.")
     return novo["id"]
 
 
@@ -68,7 +80,6 @@ def run(dry_run: bool):
     service = build_service()
     gcfg = cfg["gmail"]
     pausa = cfg.get("ai", {}).get("pausa_entre_emails", 4)
-    label_id = None if dry_run else _get_or_create_label(service)
 
     query = f"{gcfg.get('query', 'in:inbox')} -label:{LABEL_NOME}"
     resp = service.users().messages().list(
@@ -91,17 +102,31 @@ def run(dry_run: bool):
             print(f"\n--- De: {data['from']} | Assunto: {data['subject']}")
             print(f"    categoria: {cat} | motivo: {resultado['motivo']}")
 
+            # Define qual subpasta será usada
+            if cat == "spam_propaganda":
+                label_alvo = "AutoMail/Spam"
+            elif cat == "responde_se":
+                label_alvo = "AutoMail/Respostas"
+            else:  # precisa_humano
+                pasta_sugerida = resultado.get("pasta_sugerida", "").strip()
+                if pasta_sugerida:
+                    # Limpa o nome sugerido para evitar erros na API do Gmail
+                    pasta_limpa = "".join(c for c in pasta_sugerida if c.isalnum() or c in (' ', '-', '_')).strip()
+                    label_alvo = f"AutoMail/{pasta_limpa}"
+                else:
+                    label_alvo = "AutoMail/Atencao"
+
             if dry_run:
-                print("    [DRY-RUN] nenhuma acao executada.")
+                print(f"    [DRY-RUN] seria movido para: {label_alvo}")
             else:
                 if cat == "spam_propaganda":
                     if cfg["automation"].get("auto_delete_spam"):
                         service.users().messages().trash(
                             userId="me", id=data["id"]).execute()
-                        print("    -> movido para a LIXEIRA (recuperavel por 30 dias)")
+                        print(f"    -> movido para a LIXEIRA e etiquetado como {label_alvo}")
                         cont["acoes"] += 1
                     else:
-                        print("    -> spam, mas auto_delete_spam=false: so etiquetado")
+                        print(f"    -> spam, auto_delete_spam=false: apenas etiquetado em {label_alvo}")
                 elif cat == "responde_se":
                     if cfg["automation"].get("auto_reply_enabled") and resultado.get("resposta"):
                         _send_reply(service, data, msg, resultado["resposta"],
@@ -121,7 +146,10 @@ def run(dry_run: bool):
                         cont["acoes"] += 1
                     else:
                         print("    [AVISO] falha ao notificar WhatsApp")
-                _apply_label(service, data["id"], label_id)
+                
+                # Aplica a sub-etiqueta específica
+                label_id_alvo = _get_or_create_label_path(service, label_alvo)
+                _apply_label(service, data["id"], label_id_alvo)
         except HttpError as exc:
             cont["erros"] += 1
             print(f"    [ERRO] Gmail: {exc}")

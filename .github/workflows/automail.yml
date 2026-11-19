@@ -2,10 +2,8 @@ name: automail
 
 on:
   schedule:
-    - cron: "*/30 8-17 * * 1-5"
-      timezone: "America/Sao_Paulo"
-    - cron: "0 18 * * 1-5"
-      timezone: "America/Sao_Paulo"
+    # A cada 30 min, seg-sex, das 8h as 18h30 de Brasilia (= 11h-21h UTC)
+    - cron: "*/30 11-21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -64,7 +62,7 @@ jobs:
           INFOBIP_API_KEY: ${{ secrets.INFOBIP_API_KEY }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python main.py
+            python main.py --dry-run
           else
             python main.py
           fi

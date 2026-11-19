@@ -64,7 +64,7 @@ jobs:
           INFOBIP_API_KEY: ${{ secrets.INFOBIP_API_KEY }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python main.py --dry-run
+            python main.py
           else
             python main.py
           fi

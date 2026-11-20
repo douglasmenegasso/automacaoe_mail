@@ -1,7 +1,4 @@
-"""Webhook do WhatsApp (Fase C+): recebe mensagens e executa comandos.
-Roda no Vercel (serverless, gratuito). A Meta chama /api/webhook quando
-voce responde no WhatsApp.
-"""
+"""Webhook do WhatsApp (Fase C+): recebe mensagens e executa comandos."""
 import json
 import os
 import re
@@ -25,11 +22,9 @@ LABEL = "AutoMail"
 SUBPASTAS = ["Spam", "Atencao", "Seguranca", "Financeiro", "Bancos",
              "Pessoal", "Trabalho", "Outros", "Respostas"]
 
-
 def _gmail():
     creds = Credentials.from_authorized_user_info(json.loads(GMAIL_TOKEN_JSON))
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
-
 
 def _label_id(service, name, create=False):
     resp = service.users().labels().list(userId="me").execute()
@@ -44,12 +39,10 @@ def _label_id(service, name, create=False):
               "messageListVisibility": "show"}).execute()
     return novo["id"]
 
-
 def _latest(service, q):
     resp = service.users().messages().list(userId="me", q=q, maxResults=1).execute()
     ids = resp.get("messages", [])
     return ids[0]["id"] if ids else None
-
 
 def _modify(service, mid, add=None, remove=None):
     body = {}
@@ -59,16 +52,16 @@ def _modify(service, mid, add=None, remove=None):
         body["removeLabelIds"] = remove
     service.users().messages().modify(userId="me", id=mid, body=body).execute()
 
-
 def send_wa(to, text):
+    print(f"📤 Tentando enviar para {to}: {text[:30]}...")
     r = requests.post(
         f"https://graph.facebook.com/{META_API}/{META_PHONE_ID}/messages",
         headers={"Authorization": f"Bearer {META_TOKEN}"},
         json={"messaging_product": "whatsapp", "to": to,
               "type": "text", "text": {"body": text}},
     )
+    print(f"📥 Resposta do envio: {r.status_code} - {r.text}")
     return r.ok
-
 
 def _cmd_ajuda():
     return (
@@ -83,7 +76,6 @@ def _cmd_ajuda():
         "ajuda → esta lista"
     )
 
-
 def _cmd_verificar():
     url = (f"https://api.github.com/repos/{GITHUB_REPO}"
            f"/actions/workflows/{GITHUB_WORKFLOW}/dispatches")
@@ -97,7 +89,6 @@ def _cmd_verificar():
         return "🔄 Análise disparada! Vou analisar agora e te aviso se achar algo importante."
     return f"⚠️ Falha ao disparar ({r.status_code})"
 
-
 def _cmd_status():
     s = _gmail()
     linhas = []
@@ -109,7 +100,6 @@ def _cmd_status():
                                          maxResults=500).execute()
         linhas.append(f"• {nome}: {len(resp.get('messages', []))}")
     return "📊 *Status*\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas)
-
 
 def _cmd_nao_spam(termo):
     s = _gmail()
@@ -123,7 +113,6 @@ def _cmd_nao_spam(termo):
         return "🤷 Não achei no Spam com esse termo."
     _modify(s, mid, add=[aten_id, "INBOX"], remove=[spam_id])
     return "✅ Tirado do Spam, devolvido pra entrada."
-
 
 def _cmd_mover(termo, pasta):
     s = _gmail()
@@ -143,7 +132,6 @@ def _cmd_mover(termo, pasta):
     _modify(s, mid, add=[alvo], remove=remove)
     return f"✅ Movido para {LABEL}/{pasta}."
 
-
 def _cmd_arquivar(termo):
     s = _gmail()
     pai = _label_id(s, LABEL)
@@ -155,7 +143,6 @@ def _cmd_arquivar(termo):
         return "🤷 Não achei com esse termo."
     _modify(s, mid, remove=["INBOX"])
     return "✅ Arquivado."
-
 
 def _cmd_ultimos(n):
     s = _gmail()
@@ -171,7 +158,6 @@ def _cmd_ultimos(n):
                for h in full.get("payload", {}).get("headers", [])}
         linhas.append(f"• {hdr.get('From', '?')} — {hdr.get('Subject', '?')[:50]}")
     return f"📥 *Últimos {n}*\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas)
-
 
 def handle(text):
     t = text.strip().lower()
@@ -195,10 +181,7 @@ def handle(text):
         return _cmd_ultimos(m.group(1))
     return _cmd_ajuda()
 
-
 class handler(BaseHTTPRequestHandler):
-    """Handler serverless do Vercel."""
-
     def _resp(self, code, body=""):
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
@@ -216,28 +199,45 @@ class handler(BaseHTTPRequestHandler):
             self._resp(403, "forbidden")
 
     def do_POST(self):
+        print("🔔 POST recebido!")
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             data = json.loads(body)
-        except Exception:
+            print("📦 Dados recebidos:", json.dumps(data))
+        except Exception as e:
+            print("❌ Erro ao ler body:", e)
             self._resp(200, "ok")
             return
+        
         try:
             entry = data["entry"][0]["changes"][0]["value"]
-        except Exception:
+            print("📝 Entry:", json.dumps(entry))
+        except Exception as e:
+            print("❌ Erro ao extrair entry:", e)
             self._resp(200, "ok")
             return
+            
         if "messages" not in entry:
+            print("⚠️ Sem 'messages' no entry")
             self._resp(200, "ok")
             return
+            
         msg = entry["messages"][0]
         wa_id = msg.get("from")
         text = (msg.get("text") or {}).get("body", "").strip()
+        print(f"👤 wa_id: {wa_id} | 💬 text: '{text}'")
+        
         if not text:
+            print("⚠️ Texto vazio, ignorando")
             self._resp(200, "ok")
             return
+            
         reply = handle(text)
+        print(f"🤖 Reply gerado: {reply[:50]}...")
+        
         if reply:
-            send_wa(wa_id, reply)
+            success = send_wa(wa_id, reply)
+            print(f"✅ Envio realizado? {success}")
+            
         self._resp(200, "ok")

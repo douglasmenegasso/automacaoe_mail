@@ -3,7 +3,7 @@ name: automail
 on:
   schedule:
     # A cada 30 min, seg-sex, das 8h as 18h30 de Brasilia (= 11h-21h UTC)
-    - cron: "*/30 11-21 * * 1-5"
+    - cron: "*/7 * * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:

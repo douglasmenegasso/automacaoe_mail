@@ -74,8 +74,8 @@ def _get_or_create_label_path(service, label_path: str) -> str:
 
 
 def _apply_label(service, msg: dict, label_alvo: str):
-    """Aplica a etiqueta alvo + a pai 'AutoMail' e REMOVE outras sub-etiquetas
-    AutoMail/* para nao acumular classificacoes duplicadas."""
+    """Aplica a etiqueta alvo + a pai 'AutoMail', remove outras sub-etiquetas
+    e, se for Spam, move de verdade para o SPAM nativo do Gmail."""
     resp = service.users().labels().list(userId="me").execute()
     id2name = {lb["id"]: lb["name"] for lb in resp.get("labels", [])}
     parent_id = _get_or_create_label_path(service, LABEL_NOME)
@@ -84,10 +84,14 @@ def _apply_label(service, msg: dict, label_alvo: str):
     remover = [lid for lid in atuais
                if id2name.get(lid, "").lower().startswith("automail/")
                and lid != alvo_id]
+    adicionar = [alvo_id, parent_id]
+    if label_alvo.lower() == "automail/spam":
+        adicionar.append("SPAM")
+        if "INBOX" not in remover:
+            remover.append("INBOX")
     service.users().messages().modify(
         userId="me", id=msg["id"],
-        body={"addLabelIds": [alvo_id, parent_id],
-              "removeLabelIds": remover}).execute()
+        body={"addLabelIds": adicionar, "removeLabelIds": remover}).execute()
 
 
 def _escolher_principal(nomes: list) -> str:
@@ -176,13 +180,8 @@ def run(dry_run: bool):
                 print(f"    [DRY-RUN] seria movido para: {label_alvo}")
             else:
                 if cat == "spam_propaganda":
-                    if cfg["automation"].get("auto_delete_spam"):
-                        service.users().messages().trash(
-                            userId="me", id=data["id"]).execute()
-                        print(f"    -> movido para a LIXEIRA e etiquetado como {label_alvo}")
-                        cont["acoes"] += 1
-                    else:
-                        print(f"    -> spam, auto_delete_spam=false: apenas etiquetado em {label_alvo}")
+                    print("    -> spam: movendo para o SPAM nativo do Gmail")
+                    cont["acoes"] += 1
                 elif cat == "responde_se":
                     if cfg["automation"].get("auto_reply_enabled") and resultado.get("resposta"):
                         _send_reply(service, data, msg, resultado["resposta"],

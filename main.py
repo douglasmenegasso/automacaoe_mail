@@ -19,43 +19,30 @@ from whatsapp_notifier import send_whatsapp
 
 LABEL_NOME = "AutoMail"
 
-# Emoji por tipo de pasta (aparece no alerta do WhatsApp)
 _EMOJI_PASTA = {
-    "Seguranca": "🔒",
-    "Financeiro": "💰",
-    "Bancos": "🏦",
-    "Vagas": "💼",
-    "Pessoal": "👤",
-    "Contas": "🧾",
-    "Fornecedores": "📦",
-    "Trabalho": "🛠️",
-    "Outros": "📁",
-    "Atencao": "🙋",
+    "Seguranca": "🔒", "Financeiro": "💰", "Bancos": "🏦", "Vagas": "💼",
+    "Pessoal": "👤", "Contas": "🧾", "Fornecedores": "📦", "Trabalho": "🛠️",
+    "Outros": "📁", "Atencao": "🙋",
 }
 
 
 def _formatar_data(data_str: str) -> str:
-    """Converte a data do e-mail (RFC2822) para '19/11/2026 01:32'."""
     if not data_str:
         return ""
     try:
-        # Tenta parsear formato padrão de e-mail
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(data_str)
         return dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
-        # Se falhar, retorna a string original truncada
         return data_str[:20]
 
 
 def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> str:
-    """Monta o alerta do WhatsApp com visual de produto (negrito + divisor)."""
     assunto = data["subject"]
     if len(assunto) > 80:
         assunto = assunto[:77] + "..."
     resumo = (resultado.get("resumo_para_whatsapp") or resultado["motivo"]).strip()
     data_formatada = _formatar_data(data.get("date", ""))
-    
     return (
         f"{emoji} *{pasta_nome.upper()}*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -67,32 +54,46 @@ def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> 
 
 
 def _get_or_create_label_path(service, label_path: str) -> str:
-    """Garante que o label (e seus pais, se houver '/') exista e retorna o ID."""
     resp = service.users().labels().list(userId="me").execute()
     existing = {lb["name"].lower(): lb["id"] for lb in resp.get("labels", [])}
-
     if label_path.lower() in existing:
         return existing[label_path.lower()]
-
     if "/" in label_path:
         parent_name = label_path.split("/")[0]
         if parent_name.lower() not in existing:
             service.users().labels().create(
                 userId="me",
-                body={"name": parent_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
-            ).execute()
-
+                body={"name": parent_name, "labelListVisibility": "labelShow",
+                      "messageListVisibility": "show"}).execute()
     novo = service.users().labels().create(
         userId="me",
-        body={"name": label_path, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
-    ).execute()
+        body={"name": label_path, "labelListVisibility": "labelShow",
+              "messageListVisibility": "show"}).execute()
     print(f"[GMAIL] Label '{label_path}' criada.")
     return novo["id"]
 
 
-def _apply_label(service, msg_id: str, label_id: str):
+def _apply_label(service, msg: dict, label_alvo: str):
+    """Aplica a etiqueta alvo + a pai 'AutoMail' e REMOVE outras sub-etiquetas
+    AutoMail/* para nao acumular classificacoes duplicadas."""
+    resp = service.users().labels().list(userId="me").execute()
+    id2name = {lb["id"]: lb["name"] for lb in resp.get("labels", [])}
+    parent_id = _get_or_create_label_path(service, LABEL_NOME)
+    alvo_id = _get_or_create_label_path(service, label_alvo)
+    atuais = set(msg.get("labelIds", []))
+    remover = [lid for lid in atuais
+               if id2name.get(lid, "").lower().startswith("automail/")
+               and lid != alvo_id]
     service.users().messages().modify(
-        userId="me", id=msg_id, body={"addLabelIds": [label_id]}).execute()
+        userId="me", id=msg["id"],
+        body={"addLabelIds": [alvo_id, parent_id],
+              "removeLabelIds": remover}).execute()
+
+
+def _escolher_principal(nomes: list) -> str:
+    """Se houver duplicadas, mantem a mais importante (nao-Spam)."""
+    nao_spam = [n for n in nomes if n.lower() != "automail/spam"]
+    return nao_spam[0] if nao_spam else nomes[0]
 
 
 def _header(msg: dict, nome: str) -> str:
@@ -103,7 +104,6 @@ def _header(msg: dict, nome: str) -> str:
 
 
 def _send_reply(service, data: dict, msg: dict, texto: str, de_email: str):
-    """Responde na MESMA thread do e-mail original."""
     message_id = _header(msg, "Message-ID")
     assunto = data["subject"]
     if not assunto.lower().startswith("re:"):
@@ -116,8 +116,7 @@ def _send_reply(service, data: dict, msg: dict, texto: str, de_email: str):
     mime["References"] = message_id
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
     service.users().messages().send(
-        userId="me", body={"raw": raw, "threadId": data["thread_id"]}
-    ).execute()
+        userId="me", body={"raw": raw, "threadId": data["thread_id"]}).execute()
 
 
 def run(dry_run: bool):
@@ -133,6 +132,9 @@ def run(dry_run: bool):
     itens = resp.get("messages", [])
     print(f"[GMAIL] {len(itens)} e-mail(s) novos para analisar.")
 
+    labels_resp = service.users().labels().list(userId="me").execute()
+    id2name = {lb["id"]: lb["name"] for lb in labels_resp.get("labels", [])}
+
     cont = {"spam_propaganda": 0, "responde_se": 0, "precisa_humano": 0,
             "acoes": 0, "erros": 0}
 
@@ -141,6 +143,15 @@ def run(dry_run: bool):
             msg = service.users().messages().get(
                 userId="me", id=item["id"], format="full").execute()
             data = extract_email_data(msg)
+
+            sub_atuais = [id2name[lid] for lid in msg.get("labelIds", [])
+                          if id2name.get(lid, "").lower().startswith("automail/")]
+            if sub_atuais and not dry_run:
+                alvo = _escolher_principal(sub_atuais)
+                _apply_label(service, msg, alvo)
+                print(f"    [LIMPEZA] {data['subject']} -> mantido {alvo}")
+                continue
+
             resultado = classify_email(data, cfg)
             cat = resultado["categoria"]
             cont[cat] += 1
@@ -154,7 +165,9 @@ def run(dry_run: bool):
             else:
                 pasta_sugerida = resultado.get("pasta_sugerida", "").strip()
                 if pasta_sugerida:
-                    pasta_limpa = "".join(c for c in pasta_sugerida if c.isalnum() or c in (' ', '-', '_')).strip()
+                    pasta_limpa = "".join(
+                        c for c in pasta_sugerida
+                        if c.isalnum() or c in (' ', '-', '_')).strip()
                     label_alvo = f"AutoMail/{pasta_limpa}"
                 else:
                     label_alvo = "AutoMail/Atencao"
@@ -187,8 +200,7 @@ def run(dry_run: bool):
                     else:
                         print("    [AVISO] falha ao notificar WhatsApp")
 
-                label_id_alvo = _get_or_create_label_path(service, label_alvo)
-                _apply_label(service, data["id"], label_id_alvo)
+                _apply_label(service, msg, label_alvo)
         except HttpError as exc:
             cont["erros"] += 1
             print(f"    [ERRO] Gmail: {exc}")

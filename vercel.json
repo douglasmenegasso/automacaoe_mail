@@ -7,7 +7,7 @@
   },
   "schedules": {
     "automail": {
-      "schedule": "*/15 * * * *",
+      "schedule": "*/30 8-18 * * 1-5",
       "timezone": "America/Sao_Paulo",
       "path": "/api/cron",
       "requestMethod": "GET"

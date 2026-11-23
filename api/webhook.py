@@ -137,11 +137,42 @@ def _descobrir_pastas(service):
 
 
 def _query_limpeza(data_str):
-    """Query CANÔNICA de limpeza (usada tanto na contagem quanto na execução)."""
+    """Query canônica de exclusão: TODOS da entrada antes da data (classificados ou não)."""
     from datetime import datetime
     dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
     query_date = dt_limit.strftime("%Y/%m/%d")
-    return f"in:inbox before:{query_date} label:\"{LABEL}\""
+    return f"in:inbox before:{query_date}"
+
+
+def _cmd_limpar(data_str):
+    """Pergunta o tipo de exclusão (lixeira ou permanente) antes de executar."""
+    try:
+        from datetime import datetime
+        datetime.strptime(data_str.strip(), "%d/%m/%Y")
+    except ValueError:
+        return "❌ Data inválida. Use dd/mm/aaaa. Ex: limpar 01/01/2024", None, None
+
+    s = _gmail()
+    q = _query_limpeza(data_str)
+
+    resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
+    ids = resp.get("messages", [])
+
+    if not ids:
+        return f"🤷 Nenhum email na caixa de entrada antes de {data_str}.", None, None
+
+    confirm_texto = (
+        f"⚠️ *ATENÇÃO*\n"
+        f"Encontrei {len(ids)} emails DA CAIXA DE ENTRADA anteriores a {data_str}.\n"
+        f"(Inclui emails NÃO classificados — o backlog antigo.)\n\n"
+        f"Como deseja excluir?"
+    )
+    buttons = [
+        {"id": f"limpar_trash::{data_str}", "title": "♻️ Ir pra Lixeira"},
+        {"id": f"limpar_perm::{data_str}", "title": "💀 Exclusão Permanente"},
+        {"id": "cancelar", "title": "❌ Cancelar"},
+    ]
+    return confirm_texto, buttons, None
 
 
 # ============================================================

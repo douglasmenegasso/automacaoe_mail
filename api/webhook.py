@@ -334,10 +334,15 @@ def _executar_limpar(data_str):
     dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
     s = _gmail()
     query_date = dt_limit.strftime("%Y/%m/%d")
-    q = f"before:{query_date}"
+    
+    # Query segura: só inbox + etiqueta AutoMail + antes da data
+    q = f"in:inbox before:{query_date} label:\"{LABEL}\""
     
     resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
     ids = resp.get("messages", [])
+    
+    if not ids:
+        return f"🤷 Nenhum email encontrado na caixa de entrada antes de {data_str}.", None, None
     
     apagados = 0
     errors = 0

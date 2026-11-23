@@ -21,7 +21,7 @@ GMAIL_TOKEN_JSON = os.environ.get("GMAIL_TOKEN", "{}")
 LABEL = "AutoMail"
 SUBPASTAS = ["Spam", "Atencao", "Seguranca", "Financeiro", "Bancos",
              "Pessoal", "Trabalho", "Outros", "Respostas"]
-RULES_FILE_LOCAL = "/tmp/rules.json"  # Caminho temporário no Vercel
+RULES_FILE_LOCAL = "/tmp/rules.json"
 
 
 def _gmail():
@@ -58,14 +58,50 @@ def _modify(service, mid, add=None, remove=None):
     service.users().messages().modify(userId="me", id=mid, body=body).execute()
 
 
-def send_wa(to, text, buttons=None):
-    """Envia mensagem com botões opcionais."""
+def send_wa(to, text, buttons=None, list_items=None, header="", footer=""):
+    """Envia mensagem com botões OU lista interativa.
+    
+    Args:
+        to: número destino
+        text: corpo da mensagem
+        buttons: lista [{"id": "...", "title": "..."}] (máx 3, título máx 20 chars)
+        list_items: lista [{"id": "...", "title": "...", "description": "..."}] (máx 10, título máx 24 chars)
+        header: cabeçalho opcional (para listas)
+        footer: rodapé opcional
+    """
     print(f"📤 Tentando enviar para {to}: {text[:30]}...")
     
-    if buttons:
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
+    payload = {"messaging_product": "whatsapp", "to": to}
+    
+    if list_items and len(list_items) > 0:
+        # Mensagem tipo LISTA (rolável, até 10 itens)
+        rows = []
+        for item in list_items[:10]:
+            row = {
+                "id": item["id"],
+                "title": item["title"][:24],  # Meta limita a 24 chars
+            }
+            if item.get("description"):
+                row["description"] = item["description"][:72]
+            rows.append(row)
+        
+        payload.update({
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "header": {"type": "text", "text": header or "Menu"},
+                "body": {"text": text},
+                "action": {
+                    "button": footer or "Escolha uma opção",
+                    "sections": [
+                        {"rows": rows}
+                    ]
+                }
+            }
+        })
+    elif buttons and len(buttons) > 0:
+        # Mensagem com BOTÕES (até 3)
+        payload.update({
             "type": "interactive",
             "interactive": {
                 "type": "button",
@@ -77,14 +113,13 @@ def send_wa(to, text, buttons=None):
                     ]
                 }
             }
-        }
+        })
     else:
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
+        # Texto simples
+        payload.update({
             "type": "text",
             "text": {"body": text}
-        }
+        })
     
     r = requests.post(
         f"https://graph.facebook.com/{META_API}/{META_PHONE_ID}/messages",
@@ -96,28 +131,44 @@ def send_wa(to, text, buttons=None):
 
 
 def _cmd_ajuda():
-    """Ajuda reformulada com botões."""
-    texto = (
-        "🤖 *AUTOMAIL — menu principal*\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "Escolha uma opção abaixo ou digite o comando.\n\n"
-        "*Comandos disponíveis:*\n"
-        "• verificar → analisa a caixa AGORA\n"
-        "• status → resumo das pastas\n"
-        "• nao e spam <termo> → tira do Spam\n"
-        "• mover <termo> para <pasta> → move\n"
-        "• arquivar <termo> → tira da entrada\n"
-        "• ultimos <n> → lista os n recentes\n"
-        "• limpar <dd/mm/aaaa> → apaga emails ANTES dessa data\n"
-        "• lixeira → mostra/apaga/recupera da lixeira\n"
-        "• ajuda → esta lista"
-    )
+    """Ajuda LIMPA: só botões principais, sem lista de texto feia."""
+    texto = "🤖 *AUTOMAIL*\nComo posso ajudar?"
     buttons = [
-        {"id": "cmd_verificar", "title": "🔄 Verificar Agora"},
-        {"id": "cmd_status", "title": "📊 Status Pastas"},
-        {"id": "cmd_lixeira", "title": "🗑️ Abrir Lixeira"},
+        {"id": "menu_acoes", "title": "⚡ Ações rápidas"},
+        {"id": "menu_lixeira", "title": "🗑️ Lixeira"},
+        {"id": "menu_comandos", "title": "📋 Todos comandos"},
     ]
-    return texto, buttons
+    return texto, buttons, None
+
+
+def _cmd_menu_acoes():
+    """Menu de ações rápidas."""
+    texto = "⚡ *AÇÕES RÁPIDAS*"
+    buttons = [
+        {"id": "cmd_verificar", "title": "🔄 Analisar agora"},
+        {"id": "cmd_status", "title": "📊 Ver status"},
+        {"id": "cmd_ultimos::5", "title": "📥 Últimos 5"},
+    ]
+    return texto, buttons, None
+
+
+def _cmd_menu_comandos():
+    """Lista completa de comandos (quando clicar em 'Todos comandos')."""
+    texto = (
+        "📋 *COMANDOS DISPONÍVEIS*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "✍️ Digite:\n"
+        "• verificar\n"
+        "• status\n"
+        "• nao e spam <termo>\n"
+        "• mover <termo> para <pasta>\n"
+        "• arquivar <termo>\n"
+        "• ultimos <n>\n"
+        "• limpar <dd/mm/aaaa>\n"
+        "• lixeira\n\n"
+        "Ou use os menus acima."
+    )
+    return texto, None, None
 
 
 def _cmd_verificar():
@@ -130,8 +181,8 @@ def _cmd_verificar():
         json={"ref": "main", "inputs": {"dry_run": "false"}},
     )
     if r.status_code in (200, 204):
-        return "🔄 Análise disparada! Vou analisar agora e te aviso se achar algo importante."
-    return f"⚠️ Falha ao disparar ({r.status_code})"
+        return "🔄 Análise disparada! Te aviso se achar algo importante.", None, None
+    return f"⚠️ Falha ao disparar ({r.status_code})", None, None
 
 
 def _cmd_status():
@@ -147,8 +198,8 @@ def _cmd_status():
         count = len(resp.get("messages", []))
         linhas.append(f"• {nome}: {count}")
         total += count
-    header = f"📊 *Status* (total: {total})\n━━━━━━━━━━━━━━━━━━\n"
-    return header + "\n".join(linhas)
+    texto = f"📊 *Status* (total: {total})\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas)
+    return texto, None, None
 
 
 def _cmd_nao_spam(termo):
@@ -160,9 +211,9 @@ def _cmd_nao_spam(termo):
         q += f" {termo}"
     mid = _latest(s, q)
     if not mid:
-        return "🤷 Não achei no Spam com esse termo."
+        return "🤷 Não achei no Spam com esse termo.", None, None
     _modify(s, mid, add=[aten_id, "INBOX"], remove=[spam_id])
-    return "✅ Tirado do Spam, devolvido pra entrada."
+    return "✅ Tirado do Spam, devolvido pra entrada.", None, None
 
 
 def _cmd_mover(termo, pasta):
@@ -173,7 +224,7 @@ def _cmd_mover(termo, pasta):
         q += f" {termo}"
     mid = _latest(s, q)
     if not mid:
-        return "🤷 Não achei com esse termo."
+        return "🤷 Não achei com esse termo.", None, None
     alvo = _label_id(s, f"{LABEL}/{pasta}", create=True)
     remove = []
     for nome in SUBPASTAS:
@@ -181,7 +232,7 @@ def _cmd_mover(termo, pasta):
         if lid and lid != alvo:
             remove.append(lid)
     _modify(s, mid, add=[alvo], remove=remove)
-    return f"✅ Movido para {LABEL}/{pasta}."
+    return f"✅ Movido para {LABEL}/{pasta}.", None, None
 
 
 def _cmd_arquivar(termo):
@@ -192,9 +243,9 @@ def _cmd_arquivar(termo):
         q += f" {termo}"
     mid = _latest(s, q)
     if not mid:
-        return "🤷 Não achei com esse termo."
+        return "🤷 Não achei com esse termo.", None, None
     _modify(s, mid, remove=["INBOX"])
-    return "✅ Arquivado."
+    return "✅ Arquivado.", None, None
 
 
 def _cmd_ultimos(n):
@@ -210,7 +261,8 @@ def _cmd_ultimos(n):
         hdr = {h["name"]: h["value"]
                for h in full.get("payload", {}).get("headers", [])}
         linhas.append(f"• {hdr.get('From', '?')[:30]} — {hdr.get('Subject', '?')[:40]}")
-    return f"📥 *Últimos {n}*\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas)
+    texto = f"📥 *Últimos {n}*\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas)
+    return texto, None, None
 
 
 def _cmd_limpar(data_str):
@@ -219,10 +271,9 @@ def _cmd_limpar(data_str):
         from datetime import datetime
         dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
     except ValueError:
-        return "❌ Data inválida. Use dd/mm/aaaa. Ex: limpar 01/01/2024"
+        return "❌ Data inválida. Use dd/mm/aaaa. Ex: limpar 01/01/2024", None, None
     
     s = _gmail()
-    # Query: emails recebidos antes da data limite
     query_date = dt_limit.strftime("%Y/%m/%d")
     q = f"before:{query_date}"
     
@@ -230,7 +281,31 @@ def _cmd_limpar(data_str):
     ids = resp.get("messages", [])
     
     if not ids:
-        return f"🤷 Nenhum email encontrado antes de {data_str}."
+        return f"🤷 Nenhum email encontrado antes de {data_str}.", None, None
+    
+    # Pergunta confirmação antes de apagar
+    confirm_texto = (
+        f"⚠️ *ATENÇÃO*\n"
+        f"Vou apagar PERMANENTEMENTE {len(ids)} emails anteriores a {data_str}.\n\n"
+        f"Essa ação NÃO pode ser desfeita."
+    )
+    confirm_buttons = [
+        {"id": f"confirmar_limpar::{data_str}", "title": "✅ Confirmar apagar"},
+        {"id": "cancelar", "title": "❌ Cancelar"},
+    ]
+    return confirm_texto, confirm_buttons, None
+
+
+def _executar_limpar(data_str):
+    """Executa a limpeza após confirmação."""
+    from datetime import datetime
+    dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+    s = _gmail()
+    query_date = dt_limit.strftime("%Y/%m/%d")
+    q = f"before:{query_date}"
+    
+    resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
+    ids = resp.get("messages", [])
     
     apagados = 0
     errors = 0
@@ -238,53 +313,16 @@ def _cmd_limpar(data_str):
         try:
             s.users().messages().delete(userId="me", id=item["id"]).execute()
             apagados += 1
-        except Exception as e:
+        except Exception:
             errors += 1
     
-    result = f"🗑️ *Limpeza concluída*\n━━━━━━━━━━━━━━━━━━\nEmails apagados: {apagados}\nErros: {errors}\nData limite: {data_str}"
-    return result
+    texto = f"🗑️ *Limpeza concluída*\n━━━━━━━━━━━━━━━━━━\nEmails apagados: {apagados}\nErros: {errors}\nData limite: {data_str}"
+    return texto, None, None
 
 
-def _cmd_lixeira(action="", termo=""):
-    """Gerencia a lixeira do Gmail.
-    action: vazio=listar, recuperar=<id>, apagar=<id>, esvaziar=tudo
-    """
+def _cmd_lixeira(termo=""):
+    """Mostra a lixeira com lista interativa de recuperação/apagamento."""
     s = _gmail()
-    
-    if action == "esvaziar":
-        # Apaga permanentemente TUDO na lixeira
-        resp = s.users().messages().list(userId="me", q="in:trash", maxResults=500).execute()
-        ids = resp.get("messages", [])
-        if not ids:
-            return "🗑️ Lixeira já está vazia!"
-        
-        apagados = 0
-        for item in ids:
-            try:
-                s.users().messages().delete(userId="me", id=item["id"]).execute()
-                apagados += 1
-            except Exception:
-                pass
-        
-        return f"🗑️ Lixeira esvaziada! {apagados} emails apagados permanentemente."
-    
-    if action.startswith("recuperar::"):
-        msg_id = action.split("::")[1]
-        try:
-            _modify(s, msg_id, add=["INBOX"], remove=["TRASH"])
-            return f"✅ Email recuperado da lixeira e devolvido à entrada."
-        except Exception as e:
-            return f"❌ Erro ao recuperar: {str(e)[:50]}"
-    
-    if action.startswith("apagar::"):
-        msg_id = action.split("::")[1]
-        try:
-            s.users().messages().delete(userId="me", id=msg_id).execute()
-            return f"✅ Email apagado PERMANENTEMENTE da lixeira."
-        except Exception as e:
-            return f"❌ Erro ao apagar: {str(e)[:50]}"
-    
-    # Listar lixeira (padrão)
     q = "in:trash"
     if termo:
         q += f" {termo}"
@@ -293,74 +331,172 @@ def _cmd_lixeira(action="", termo=""):
     items = resp.get("messages", [])
     
     if not items:
-        return "🗑️ Lixeira vazia (ou sem resultados pro termo)."
+        return "🗑️ Lixeira vazia (ou sem resultados pro termo).", None, None
     
-    linhas = []
-    buttons = []
-    for i, m in enumerate(items[:10]):  # Máx 10 pra caber nos botões
+    # Monta a lista interativa (até 10 itens)
+    list_rows = []
+    for i, m in enumerate(items[:10]):
         full = s.users().messages().get(
             userId="me", id=m["id"], format="metadata",
             metadataHeaders=["From", "Subject", "Date"]).execute()
         hdr = {h["name"]: h["value"]
                for h in full.get("payload", {}).get("headers", [])}
-        assunto = hdr.get("Subject", "?")[:30]
-        remetente = hdr.get("From", "?")[:25]
-        data = hdr.get("Date", "?")[:10]
-        linhas.append(f"{i+1}. {remetente} — {assunto} ({data})")
-        
-        # Botões de ação para cada email
-        buttons.append({"id": f"lixeira_recuperar::{m['id']}", "title": f"♻️ Recuperar {i+1}"})
-        buttons.append({"id": f"lixeira_apagar::{m['id']}", "title": f"❌ Apagar {i+1}"})
+        assunto = hdr.get("Subject", "?")[:24]
+        remetente = hdr.get("From", "?")[:20]
+        list_rows.append({
+            "id": f"lixeira_item::{m['id']}",
+            "title": f"{i+1}. {assunto}",
+            "description": remetente,
+        })
     
-    texto = "🗑️ *LIXEIRA*\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas) + "\n\nUse os botões abaixo:"
-    
-    # Meta só aceita 3 botões por mensagem, então mando só os primeiros 3
-    final_buttons = buttons[:3] if buttons else None
-    
-    return texto, final_buttons
+    texto = "🗑️ Escolha um email da lixeira:"
+    return texto, None, list_rows
 
 
-def handle_button_click(button_id: str, wa_id: str) -> tuple[str, list] | None:
-    """Interpreta clique em botão e retorna resposta (+ botões extras se necessário)."""
+def _cmd_lixeira_item(msg_id):
+    """Depois de escolher um email da lixeira, mostra ações (recuperar/apagar)."""
+    s = _gmail()
+    full = s.users().messages().get(
+        userId="me", id=msg_id, format="metadata",
+        metadataHeaders=["From", "Subject", "Date"]).execute()
+    hdr = {h["name"]: h["value"]
+           for h in full.get("payload", {}).get("headers", [])}
     
-    # Formato: tipo::valor
+    texto = (
+        f"🗑️ *Item selecionado*\n"
+        f"*De:* {hdr.get('From', '?')}\n"
+        f"*Assunto:* {hdr.get('Subject', '?')[:60]}"
+    )
+    buttons = [
+        {"id": f"lixeira_recuperar::{msg_id}", "title": "♻️ Recuperar"},
+        {"id": f"lixeira_apagar::{msg_id}", "title": "❌ Apagar def."},
+        {"id": "cmd_lixeira", "title": "↩️ Voltar"},
+    ]
+    return texto, buttons, None
+
+
+def _cmd_lixeira_esvaziar():
+    """Confirmação antes de esvaziar toda a lixeira."""
+    s = _gmail()
+    resp = s.users().messages().list(userId="me", q="in:trash", maxResults=500).execute()
+    ids = resp.get("messages", [])
+    
+    if not ids:
+        return "🗑️ Lixeira já está vazia!", None, None
+    
+    texto = f"⚠️ Vou apagar PERMANENTEMENTE {len(ids)} emails da lixeira. Confirma?"
+    buttons = [
+        {"id": "confirmar_esvaziar", "title": "✅ Sim, apagar tudo"},
+        {"id": "cancelar", "title": "❌ Cancelar"},
+    ]
+    return texto, buttons, None
+
+
+def _executar_esvaziar():
+    s = _gmail()
+    resp = s.users().messages().list(userId="me", q="in:trash", maxResults=500).execute()
+    ids = resp.get("messages", [])
+    
+    apagados = 0
+    for item in ids:
+        try:
+            s.users().messages().delete(userId="me", id=item["id"]).execute()
+            apagados += 1
+        except Exception:
+            pass
+    
+    return f"🗑️ Lixeira esvaziada! {apagados} emails apagados permanentemente.", None, None
+
+
+def _load_rules_local() -> dict:
+    try:
+        with open(RULES_FILE_LOCAL, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"blocked_senders": [], "trusted_senders": []}
+
+
+def _save_rules_local(rules: dict):
+    with open(RULES_FILE_LOCAL, "w", encoding="utf-8") as f:
+        json.dump(rules, f, indent=2, ensure_ascii=False)
+
+
+def handle_button_click(button_id: str, wa_id: str):
+    """Interpreta clique em botão ou item de lista. Retorna (texto, buttons, list_items)."""
+    
     parts = button_id.split("::")
     tipo = parts[0]
     valor = "::".join(parts[1:]) if len(parts) > 1 else ""
     
+    # Menus principais
+    if tipo == "menu_acoes":
+        return _cmd_menu_acoes()
+    if tipo == "menu_lixeira":
+        return _cmd_lixeira()
+    if tipo == "menu_comandos":
+        return _cmd_menu_comandos()
+    if tipo == "cancelar":
+        return "ℹ️ Ação cancelada.", None, None
+    
+    # Comandos diretos
     if tipo == "cmd_verificar":
-        return _cmd_verificar(), None
-    
+        return _cmd_verificar()
     if tipo == "cmd_status":
-        return _cmd_status(), None
-    
+        return _cmd_status()
+    if tipo.startswith("cmd_ultimos"):
+        n = valor or "5"
+        return _cmd_ultimos(n)
     if tipo == "cmd_lixeira":
-        result = _cmd_lixeira()
-        if isinstance(result, tuple):
-            return result
-        return result, None
+        return _cmd_lixeira()
     
+    # Limpeza por data
+    if tipo == "confirmar_limpar":
+        return _executar_limpar(valor)
+    
+    # Lixeira
+    if tipo.startswith("lixeira_item"):
+        return _cmd_lixeira_item(valor)
+    if tipo.startswith("lixeira_recuperar"):
+        msg_id = valor
+        s = _gmail()
+        try:
+            _modify(s, msg_id, add=["INBOX"], remove=["TRASH"])
+            return "✅ Email recuperado da lixeira!", None, None
+        except Exception as e:
+            return f"❌ Erro: {str(e)[:50]}", None, None
+    if tipo.startswith("lixeira_apagar"):
+        msg_id = valor
+        s = _gmail()
+        try:
+            s.users().messages().delete(userId="me", id=msg_id).execute()
+            return "✅ Email apagado PERMANENTEMENTE.", None, None
+        except Exception as e:
+            return f"❌ Erro: {str(e)[:50]}", None, None
+    if tipo == "confirmar_esvaziar":
+        return _executar_esvaziar()
+    if tipo == "cmd_esvaziar":
+        return _cmd_lixeira_esvaziar()
+    
+    # Regras de remetentes
     if tipo == "seguro":
-        # Marca remetente como confiável (nunca spam)
         sender = valor
         rules = _load_rules_local()
         if sender not in rules.get("trusted_senders", []):
             rules.setdefault("trusted_senders", []).append(sender)
             _save_rules_local(rules)
-        return f"✅ Remetente {sender} marcado como CONFIÁVEL. Futuros emails dele nunca serão spam.", None
+        return f"✅ {sender} marcado como CONFIÁVEL.", None, None
     
     if tipo == "spam_remetente":
-        # Pergunta confirmação antes de aplicar regra
         sender = valor
-        confirm_text = (
-            f"🚫 Confirmar: bloquear TODOS os futuros emails de:\n*{sender}*?\n\n"
-            "Isso cria uma regra permanente e economiza créditos de IA."
+        confirm_texto = (
+            f"🚫 Bloquear TODOS os futuros emails de:\n*{sender}*?\n\n"
+            f"Cria regra permanente e economiza créditos de IA."
         )
         confirm_buttons = [
             {"id": f"confirmar_spam::{sender}", "title": "✅ Sim, Bloquear"},
-            {"id": f"cancelar_spam::{sender}", "title": "❌ Cancelar"},
+            {"id": "cancelar", "title": "❌ Cancelar"},
         ]
-        return confirm_text, confirm_buttons
+        return confirm_texto, confirm_buttons, None
     
     if tipo == "confirmar_spam":
         sender = valor
@@ -368,24 +504,27 @@ def handle_button_click(button_id: str, wa_id: str) -> tuple[str, list] | None:
         if sender not in rules.get("blocked_senders", []):
             rules.setdefault("blocked_senders", []).append(sender)
             _save_rules_local(rules)
-        return f"🚫 Remetente {sender} BLOQUEADO. Todos os emails futuros dele irão direto pro Spam sem análise de IA.", None
+        return f"🚫 {sender} BLOQUEADO permanentemente.", None, None
     
-    if tipo == "cancelar_spam":
-        return "ℹ️ Ação cancelada. Nenhuma regra foi criada.", None
-    
+    # Mover para pasta (usa LISTA interativa com todas as pastas)
     if tipo == "mover_pasta":
-        # Pede qual pasta mover
         msg_id = valor
-        mover_text = "📁 Para qual pasta deseja mover este email?"
-        mover_buttons = [
-            {"id": f"exec_move::{msg_id}::Seguranca", "title": "🔒 Seguranca"},
-            {"id": f"exec_move::{msg_id}::Financeiro", "title": "💰 Financeiro"},
-            {"id": f"exec_move::{msg_id}::Bancos", "title": "🏦 Bancos"},
-        ]
-        return mover_text, mover_buttons
+        list_rows = []
+        for nome in SUBPASTAS:
+            if nome != "Spam":  # Spam não faz sentido aqui
+                emoji_map = {
+                    "Atencao": "🙋", "Seguranca": "🔒", "Financeiro": "💰",
+                    "Bancos": "🏦", "Pessoal": "👤", "Trabalho": "🛠️",
+                    "Outros": "📁", "Respostas": "✉️",
+                }
+                emoji = emoji_map.get(nome, "📁")
+                list_rows.append({
+                    "id": f"exec_move::{msg_id}::{nome}",
+                    "title": f"{emoji} {nome}",
+                })
+        return "📁 Para qual pasta?", None, list_rows
     
     if tipo == "exec_move":
-        # Formato: msg_id::pasta
         subparts = valor.split("::")
         msg_id = subparts[0]
         pasta = subparts[1] if len(subparts) > 1 else "Atencao"
@@ -398,35 +537,9 @@ def handle_button_click(button_id: str, wa_id: str) -> tuple[str, list] | None:
             if lid and lid != alvo:
                 remove.append(lid)
         _modify(s, msg_id, add=[alvo], remove=remove)
-        return f"✅ Email movido para {LABEL}/{pasta}.", None
-    
-    if tipo.startswith("lixeira_recuperar"):
-        msg_id = valor
-        result = _cmd_lixeira(f"recuperar::{msg_id}")
-        return result, None
-    
-    if tipo.startswith("lixeira_apagar"):
-        msg_id = valor
-        result = _cmd_lixeira(f"apagar::{msg_id}")
-        return result, None
+        return f"✅ Movido para {LABEL}/{pasta}.", None, None
     
     return None
-
-
-def _load_rules_local() -> dict:
-    """Carrega rules.json localmente (no container efêmero do Vercel)."""
-    try:
-        with open(RULES_FILE_LOCAL, encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"blocked_senders": [], "trusted_senders": []}
-
-
-def _save_rules_local(rules: dict):
-    """Salva rules.json localmente. NOTA: no Vercel isso é VOLÁTIL (container morre).
-    Para persistência real, precisaria commitar no GitHub ou usar storage externo."""
-    with open(RULES_FILE_LOCAL, "w", encoding="utf-8") as f:
-        json.dump(rules, f, indent=2, ensure_ascii=False)
 
 
 class handler(BaseHTTPRequestHandler):
@@ -475,20 +588,22 @@ class handler(BaseHTTPRequestHandler):
         wa_id = msg.get("from")
         msg_type = msg.get("type", "text")
         
-        # Caso 1: Clique em botão (mensagem interativa)
+        # Caso 1: Clique em botão ou item de lista
         if msg_type == "interactive":
             interactive = msg.get("interactive", {})
             button_reply = interactive.get("button_reply", {})
             list_reply = interactive.get("list_reply", {})
             
-            button_id = button_reply.get("id") or list_reply.get("id") or ""
-            print(f"👆 Botão clicado: {button_id}")
+            clicked_id = button_reply.get("id") or list_reply.get("id") or ""
+            print(f"👆 Clique: {clicked_id}")
             
-            result = handle_button_click(button_id, wa_id)
+            result = handle_button_click(clicked_id, wa_id)
             if result:
-                reply_text, reply_buttons = result
+                reply_text, reply_buttons, reply_list = result
                 if reply_text:
-                    success = send_wa(wa_id, reply_text, buttons=reply_buttons)
+                    success = send_wa(wa_id, reply_text, 
+                                      buttons=reply_buttons, 
+                                      list_items=reply_list)
                     print(f"✅ Envio realizado? {success}")
             
             self._resp(200, "ok")
@@ -504,53 +619,47 @@ class handler(BaseHTTPRequestHandler):
             return
         
         t = text.strip().lower()
-        reply_text = None
-        reply_buttons = None
+        reply_result = None
         
         if t in ("ajuda", "help", "?"):
-            reply_text, reply_buttons = _cmd_ajuda()
+            reply_result = _cmd_ajuda()
         elif t.startswith("verificar"):
-            reply_text = _cmd_verificar()
+            reply_result = _cmd_verificar()
         elif t.startswith("status"):
-            reply_text = _cmd_status()
+            reply_result = _cmd_status()
         elif t.startswith(("nao e spam", "não é spam", "nao eh spam")):
             termo = re.sub(r"^(nao e spam|não é spam|nao eh spam)\s*", "",
                            text, flags=re.I).strip()
-            reply_text = _cmd_nao_spam(termo)
+            reply_result = _cmd_nao_spam(termo)
         elif re.match(r"^mover (.+?) para ([\w\- ]+)$", t):
             m = re.match(r"mover (.+?) para ([\w\- ]+)", t)
-            reply_text = _cmd_mover(m.group(1).strip(), m.group(2).strip().title().replace(" ", ""))
+            reply_result = _cmd_mover(m.group(1).strip(), 
+                                       m.group(2).strip().title().replace(" ", ""))
         elif t.startswith("arquivar"):
-            reply_text = _cmd_arquivar(text[len("arquivar"):].strip())
+            reply_result = _cmd_arquivar(text[len("arquivar"):].strip())
         elif re.match(r"^ultimos (\d+)$", t):
             m = re.match(r"ultimos (\d+)", t)
-            reply_text = _cmd_ultimos(m.group(1))
+            reply_result = _cmd_ultimos(m.group(1))
         elif t.startswith("limpar"):
             data_arg = text[len("limpar"):].strip()
-            reply_text = _cmd_limpar(data_arg)
-        elif t.startswith("lixeira"):
-            resto = text[len("lixeira"):].strip()
-            if resto.startswith("esvaziar"):
-                reply_text = _cmd_lixeira("esvaziar")
-            elif resto:
-                result = _cmd_lixeira("", resto)
-                if isinstance(result, tuple):
-                    reply_text, reply_buttons = result
-                else:
-                    reply_text = result
-            else:
-                result = _cmd_lixeira()
-                if isinstance(result, tuple):
-                    reply_text, reply_buttons = result
-                else:
-                    reply_text = result
+            reply_result = _cmd_limpar(data_arg)
+        elif t == "lixeira":
+            reply_result = _cmd_lixeira()
+        elif t.startswith("lixeira esvaziar"):
+            reply_result = _cmd_lixeira_esvaziar()
+        elif t.startswith("lixeira ") and len(t) > 8:
+            termo = text[len("lixeira"):].strip()
+            reply_result = _cmd_lixeira(termo)
         else:
-            reply_text, reply_buttons = _cmd_ajuda()
+            reply_result = _cmd_ajuda()
         
-        print(f"🤖 Reply gerado: {(reply_text or '')[:50]}...")
-        
-        if reply_text:
-            success = send_wa(wa_id, reply_text, buttons=reply_buttons)
-            print(f"✅ Envio realizado? {success}")
+        if reply_result:
+            reply_text, reply_buttons, reply_list = reply_result
+            print(f"🤖 Reply gerado: {(reply_text or '')[:50]}...")
+            if reply_text:
+                success = send_wa(wa_id, reply_text, 
+                                  buttons=reply_buttons, 
+                                  list_items=reply_list)
+                print(f"✅ Envio realizado? {success}")
             
         self._resp(200, "ok")

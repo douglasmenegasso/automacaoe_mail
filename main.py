@@ -68,11 +68,7 @@ def _formatar_data(data_str: str) -> str:
 
 
 def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> tuple[str, list]:
-    """Monta o alerta do WhatsApp com visual de produto + botões.
-    
-    Returns:
-        (texto_da_mensagem, lista_de_botoes)
-    """
+    """Monta o alerta do WhatsApp com visual de produto + botões."""
     assunto = data["subject"]
     if len(assunto) > 80:
         assunto = assunto[:77] + "..."
@@ -88,11 +84,10 @@ def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> 
         f"{resumo}"
     )
     
-    # Botões interativos (máx 3, título máx 20 chars)
     buttons = [
         {"id": f"seguro::{data['from']}", "title": "✅ Marcar Seguro"},
-        {"id": f"spam_remetente::{data['from']}", "title": "🚫 Spam Remetente"},
-        {"id": f"mover_pasta::{data['id']}", "title": "📁 Mover Pasta"},
+        {"id": f"spam_remetente::{data['from']}", "title": "🚫 Bloquear Remetente"},
+        {"id": f"mover_pasta::{data['id']}", "title": "📁 Mover p/ Pasta"},
     ]
     
     return texto, buttons

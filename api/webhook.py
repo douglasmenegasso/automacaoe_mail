@@ -19,7 +19,8 @@ GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "automail.yml")
 GMAIL_TOKEN_JSON = os.environ.get("GMAIL_TOKEN", "{}")
 
 LABEL = "AutoMail"
-
+SUBPASTAS = ["Spam", "Atencao", "Seguranca", "Financeiro", "Bancos",
+             "Pessoal", "Trabalho", "Outros", "Respostas", "Contas", "Vagas"]
 RULES_FILE_LOCAL = "/tmp/rules.json"
 
 
@@ -66,20 +67,16 @@ def send_wa(to, text, buttons=None, list_items=None, header="", footer=""):
         buttons: lista [{"id": "...", "title": "..."}] (máx 3, título máx 20 chars)
         list_items: lista [{"id": "...", "title": "...", "description": "..."}] (máx 10, título máx 24 chars)
         header: cabeçalho opcional (para listas)
-        footer: rodapé opcional
+        footer: rodapé/opção padrão opcional
     """
     print(f"📤 Tentando enviar para {to}: {text[:30]}...")
     
     payload = {"messaging_product": "whatsapp", "to": to}
     
     if list_items and len(list_items) > 0:
-        # Mensagem tipo LISTA (rolável, até 10 itens)
         rows = []
         for item in list_items[:10]:
-            row = {
-                "id": item["id"],
-                "title": item["title"][:24],  # Meta limita a 24 chars
-            }
+            row = {"id": item["id"], "title": item["title"][:24]}
             if item.get("description"):
                 row["description"] = item["description"][:72]
             rows.append(row)
@@ -92,14 +89,11 @@ def send_wa(to, text, buttons=None, list_items=None, header="", footer=""):
                 "body": {"text": text},
                 "action": {
                     "button": footer or "Escolha uma opção",
-                    "sections": [
-                        {"rows": rows}
-                    ]
+                    "sections": [{"rows": rows}]
                 }
             }
         })
     elif buttons and len(buttons) > 0:
-        # Mensagem com BOTÕES (até 3)
         payload.update({
             "type": "interactive",
             "interactive": {
@@ -114,11 +108,7 @@ def send_wa(to, text, buttons=None, list_items=None, header="", footer=""):
             }
         })
     else:
-        # Texto simples
-        payload.update({
-            "type": "text",
-            "text": {"body": text}
-        })
+        payload.update({"type": "text", "text": {"body": text}})
     
     r = requests.post(
         f"https://graph.facebook.com/{META_API}/{META_PHONE_ID}/messages",
@@ -129,8 +119,36 @@ def send_wa(to, text, buttons=None, list_items=None, header="", footer=""):
     return r.ok
 
 
+# ============================================================
+# FUNÇÕES AUXILIARES DINÂMICAS (descobrem pastas no Gmail)
+# ============================================================
+
+def _descobrir_pastas(service):
+    """Lê as etiquetas do Gmail e retorna só as sub-pastas de AutoMail.
+    Retorna lista de tuplas (nome_pasta, nome_label_completo), ordenada."""
+    resp = service.users().labels().list(userId="me").execute()
+    pastas_encontradas = []
+    for lb in resp.get("labels", []):
+        nome = lb["name"]
+        if nome.startswith(f"{LABEL}/"):
+            pasta_nome = nome.split("/", 1)[1]
+            pastas_encontradas.append((pasta_nome, nome))
+    return sorted(pastas_encontradas)
+
+
+def _query_limpeza(data_str):
+    """Query CANÔNICA de limpeza (usada tanto na contagem quanto na execução)."""
+    from datetime import datetime
+    dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+    query_date = dt_limit.strftime("%Y/%m/%d")
+    return f"in:inbox before:{query_date} label:\"{LABEL}\""
+
+
+# ============================================================
+# COMANDOS PRINCIPAIS
+# ============================================================
+
 def _cmd_ajuda():
-    """Ajuda LIMPA: só botões principais, sem lista de texto feia."""
     texto = "🤖 *AUTOMAIL*\nComo posso ajudar?"
     buttons = [
         {"id": "menu_acoes", "title": "⚡ Ações rápidas"},
@@ -141,7 +159,6 @@ def _cmd_ajuda():
 
 
 def _cmd_menu_acoes():
-    """Menu de ações rápidas."""
     texto = "⚡ *AÇÕES RÁPIDAS*"
     buttons = [
         {"id": "cmd_verificar", "title": "🔄 Analisar agora"},
@@ -152,7 +169,6 @@ def _cmd_menu_acoes():
 
 
 def _cmd_menu_comandos():
-    """Lista completa de comandos (quando clicar em 'Todos comandos')."""
     texto = (
         "📋 *COMANDOS DISPONÍVEIS*\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -184,43 +200,6 @@ def _cmd_verificar():
     return f"⚠️ Falha ao disparar ({r.status_code})", None, None
 
 
-def _descobrir_pastas(service):
-    """Lê as etiquetas do Gmail e retorna só as que são sub-pastas de AutoMail."""
-    resp = service.users().labels().list(userId="me").execute()
-    id2name = {lb["id"]: lb["name"] for lb in resp.get("labels", [])}
-    
-    # Pega o ID da etiqueta pai "AutoMail"
-    pai_id = None
-    for lid, nome in id2name.items():
-        if nome.lower() == LABEL.lower():
-            pai_id = lid
-            break
-    
-    if not pai_id:
-        return []
-    
-    # Filtra só as sub-etiquetas (começam com "AutoMail/")
-    pastas_encontradas = []
-    for lid, nome in id2name.items():
-        if nome.startswith(f"{LABEL}/"):
-            pasta_nome = nome.split("/", 1)[1]  # Remove "AutoMail/"
-            pastas_encontradas.append((pasta_nome, lid))
-    
-    return sorted(pastas_encontradas)
-
-
-def _descobrir_pastas(service):
-    """Lê as etiquetas do Gmail e retorna só as sub-pastas de AutoMail."""
-    resp = service.users().labels().list(userId="me").execute()
-    pastas_encontradas = []
-    for lb in resp.get("labels", []):
-        nome = lb["name"]
-        if nome.startswith(f"{LABEL}/"):
-            pasta_nome = nome.split("/", 1)[1]  # Remove "AutoMail/"
-            pastas_encontradas.append((pasta_nome, nome))
-    return sorted(pastas_encontradas)
-
-
 def _cmd_status():
     s = _gmail()
     pastas = _descobrir_pastas(s)
@@ -231,13 +210,9 @@ def _cmd_status():
     linhas = []
     total = 0
     for nome_pasta, nome_label_completo in pastas:
-        # Conta por NOME da label (não por ID)
+        # Conta por NOME da label (não por ID) — corrigido
         q = f'label:"{nome_label_completo}" -in:sent -in:chat'
-        resp = s.users().messages().list(
-            userId="me", 
-            q=q,
-            maxResults=500
-        ).execute()
+        resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
         count = len(resp.get("messages", []))
         linhas.append(f"• {nome_pasta}: {count}")
         total += count
@@ -309,28 +284,30 @@ def _cmd_ultimos(n):
     return texto, None, None
 
 
+# ============================================================
+# LIMPEZA POR DATA (com confirmação e query alinhada)
+# ============================================================
+
 def _cmd_limpar(data_str):
-    """Apaga todos os emails ANTES da data informada (dd/mm/aaaa)."""
     try:
         from datetime import datetime
-        dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+        datetime.strptime(data_str.strip(), "%d/%m/%Y")
     except ValueError:
         return "❌ Data inválida. Use dd/mm/aaaa. Ex: limpar 01/01/2024", None, None
     
     s = _gmail()
-    query_date = dt_limit.strftime("%Y/%m/%d")
-    q = f"before:{query_date}"
+    q = _query_limpeza(data_str)
     
     resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
     ids = resp.get("messages", [])
     
     if not ids:
-        return f"🤷 Nenhum email encontrado antes de {data_str}.", None, None
+        return f"🤷 Nenhum email na caixa de entrada (com AutoMail) antes de {data_str}.", None, None
     
-    # Pergunta confirmação antes de apagar
     confirm_texto = (
         f"⚠️ *ATENÇÃO*\n"
-        f"Vou apagar PERMANENTEMENTE {len(ids)} emails anteriores a {data_str}.\n\n"
+        f"Vou apagar PERMANENTEMENTE {len(ids)} emails DA CAIXA DE ENTRADA anteriores a {data_str}.\n\n"
+        f"(Só emails com etiqueta AutoMail. Não afeta Spam/Lixeira.)\n\n"
         f"Essa ação NÃO pode ser desfeita."
     )
     confirm_buttons = [
@@ -341,20 +318,14 @@ def _cmd_limpar(data_str):
 
 
 def _executar_limpar(data_str):
-    """Executa a limpeza após confirmação."""
-    from datetime import datetime
-    dt_limit = datetime.strptime(data_str.strip(), "%d/%m/%Y")
     s = _gmail()
-    query_date = dt_limit.strftime("%Y/%m/%d")
-    
-    # Query segura: só inbox + etiqueta AutoMail + antes da data
-    q = f"in:inbox before:{query_date} label:\"{LABEL}\""
+    q = _query_limpeza(data_str)  # ← MESMA query usada na contagem
     
     resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
     ids = resp.get("messages", [])
     
     if not ids:
-        return f"🤷 Nenhum email encontrado na caixa de entrada antes de {data_str}.", None, None
+        return "🤷 Nenhum email para apagar (estado mudou desde a confirmação?).", None, None
     
     apagados = 0
     errors = 0
@@ -369,8 +340,11 @@ def _executar_limpar(data_str):
     return texto, None, None
 
 
+# ============================================================
+# LIXEIRA
+# ============================================================
+
 def _cmd_lixeira(termo=""):
-    """Mostra a lixeira com lista interativa de recuperação/apagamento."""
     s = _gmail()
     q = "in:trash"
     if termo:
@@ -382,7 +356,6 @@ def _cmd_lixeira(termo=""):
     if not items:
         return "🗑️ Lixeira vazia (ou sem resultados pro termo).", None, None
     
-    # Monta a lista interativa (até 10 itens)
     list_rows = []
     for i, m in enumerate(items[:10]):
         full = s.users().messages().get(
@@ -398,12 +371,10 @@ def _cmd_lixeira(termo=""):
             "description": remetente,
         })
     
-    texto = "🗑️ Escolha um email da lixeira:"
-    return texto, None, list_rows
+    return "🗑️ Escolha um email da lixeira:", None, list_rows
 
 
 def _cmd_lixeira_item(msg_id):
-    """Depois de escolher um email da lixeira, mostra ações (recuperar/apagar)."""
     s = _gmail()
     full = s.users().messages().get(
         userId="me", id=msg_id, format="metadata",
@@ -425,7 +396,6 @@ def _cmd_lixeira_item(msg_id):
 
 
 def _cmd_lixeira_esvaziar():
-    """Confirmação antes de esvaziar toda a lixeira."""
     s = _gmail()
     resp = s.users().messages().list(userId="me", q="in:trash", maxResults=500).execute()
     ids = resp.get("messages", [])
@@ -457,6 +427,10 @@ def _executar_esvaziar():
     return f"🗑️ Lixeira esvaziada! {apagados} emails apagados permanentemente.", None, None
 
 
+# ============================================================
+# REGRAS PERSISTENTES (volátil no Vercel /tmp)
+# ============================================================
+
 def _load_rules_local() -> dict:
     try:
         with open(RULES_FILE_LOCAL, encoding="utf-8") as f:
@@ -470,9 +444,11 @@ def _save_rules_local(rules: dict):
         json.dump(rules, f, indent=2, ensure_ascii=False)
 
 
+# ============================================================
+# INTERPRETADOR DE CLIQUES EM BOTÕES / LISTAS
+# ============================================================
+
 def handle_button_click(button_id: str, wa_id: str):
-    """Interpreta clique em botão ou item de lista. Retorna (texto, buttons, list_items)."""
-    
     parts = button_id.split("::")
     tipo = parts[0]
     valor = "::".join(parts[1:]) if len(parts) > 1 else ""
@@ -555,22 +531,26 @@ def handle_button_click(button_id: str, wa_id: str):
             _save_rules_local(rules)
         return f"🚫 {sender} BLOQUEADO permanentemente.", None, None
     
-    # Mover para pasta (usa LISTA interativa com todas as pastas)
+    # Mover para pasta (LISTA dinâmica com todas as pastas reais do Gmail)
     if tipo == "mover_pasta":
         msg_id = valor
+        s = _gmail()
+        pastas = _descobrir_pastas(s)
+        emoji_map = {
+            "Atencao": "🙋", "Seguranca": "🔒", "Financeiro": "💰",
+            "Bancos": "🏦", "Pessoal": "👤", "Trabalho": "🛠️",
+            "Outros": "📁", "Respostas": "✉️", "Contas": "🧾", "Vagas": "💼",
+        }
         list_rows = []
-        for nome in SUBPASTAS:
-            if nome != "Spam":  # Spam não faz sentido aqui
-                emoji_map = {
-                    "Atencao": "🙋", "Seguranca": "🔒", "Financeiro": "💰",
-                    "Bancos": "🏦", "Pessoal": "👤", "Trabalho": "🛠️",
-                    "Outros": "📁", "Respostas": "✉️",
-                }
-                emoji = emoji_map.get(nome, "📁")
-                list_rows.append({
-                    "id": f"exec_move::{msg_id}::{nome}",
-                    "title": f"{emoji} {nome}",
-                })
+        for nome_pasta, _ in pastas:
+            if nome_pasta.lower() == "spam":
+                continue
+            emoji = emoji_map.get(nome_pasta, "📁")
+            list_rows.append({
+                "id": f"exec_move::{msg_id}::{nome_pasta}",
+                "title": f"{emoji} {nome_pasta}",
+                "description": f"Mover para {nome_pasta}",
+            })
         return "📁 Para qual pasta?", None, list_rows
     
     if tipo == "exec_move":
@@ -590,6 +570,10 @@ def handle_button_click(button_id: str, wa_id: str):
     
     return None
 
+
+# ============================================================
+# HANDLER HTTP (recebe GET de verificação e POST de mensagens)
+# ============================================================
 
 class handler(BaseHTTPRequestHandler):
     def _resp(self, code, body=""):

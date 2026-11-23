@@ -1,4 +1,4 @@
-"""Envio de notificações por WhatsApp.
+"""Envio de notificações por WhatsApp com suporte a botões interativos.
 
 Suporta três provedores (escolha em config.json -> whatsapp.provider):
 - "twilio": use uma conta Twilio com WhatsApp habilitado (https://www.twilio.com/whatsapp)
@@ -14,35 +14,48 @@ import os
 import requests
 
 
-def send_whatsapp(config: dict, message: str) -> bool:
+def send_whatsapp(config: dict, message: str, buttons: list = None) -> bool:
+    """Envia mensagem pelo WhatsApp. Se 'buttons' for fornecida, envia como interactive message.
+    
+    Args:
+        config: dicionário de configuração
+        message: texto da mensagem
+        buttons: lista de dicts {"id": "...", "title": "..."} (máx 3, título máx 20 chars)
+                 Exemplo: [{"id": "seguro", "title": "Marcar Seguro"}, 
+                           {"id": "spam_remetente", "title": "Spam Remetente"},
+                           {"id": "mover_pasta", "title": "Mover Pasta"}]
+    """
     wa_cfg = config.get("whatsapp", {})
     provider = wa_cfg.get("provider", "console")
 
     if provider == "twilio":
-        return _send_twilio(wa_cfg["twilio"], message)
+        return _send_twilio(wa_cfg["twilio"], message, buttons)
     if provider == "infobip":
-        return _send_infobip(wa_cfg["infobip"], message)
+        return _send_infobip(wa_cfg["infobip"], message, buttons)
     if provider == "meta":
-        return _send_meta(wa_cfg["meta"], message)
+        return _send_meta(wa_cfg["meta"], message, buttons)
     print(f"[WHATSAPP-console] {message}")
+    if buttons:
+        print(f"[WHATSAPP-console] Botões: {[b['title'] for b in buttons]}")
     return True
 
 
-def _send_twilio(cfg: dict, message: str) -> bool:
+def _send_twilio(cfg: dict, message: str, buttons: list = None) -> bool:
     sid = os.environ.get(cfg["account_sid_env"], "")
     token = os.environ.get(cfg["auth_token_env"], "")
     if not sid or not token:
         print("[ERRO WhatsApp] Variáveis de ambiente da Twilio ausentes.")
         return False
     url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+    data = {
+        "From": cfg["from_number"],
+        "To": cfg["to_number"],
+        "Body": message,
+    }
     resp = requests.post(
         url,
         auth=(sid, token),
-        data={
-            "From": cfg["from_number"],
-            "To": cfg["to_number"],
-            "Body": message,
-        },
+        data=data,
         timeout=30,
     )
     ok = resp.status_code in (200, 201)
@@ -50,7 +63,7 @@ def _send_twilio(cfg: dict, message: str) -> bool:
     return ok
 
 
-def _send_infobip(cfg: dict, message: str) -> bool:
+def _send_infobip(cfg: dict, message: str, buttons: list = None) -> bool:
     api_key = os.environ.get(cfg["api_key_env"], "")
     if not api_key:
         print("[ERRO WhatsApp] Variável de ambiente da Infobip ausente.")
@@ -75,7 +88,7 @@ def _send_infobip(cfg: dict, message: str) -> bool:
     return ok
 
 
-def _send_meta(cfg: dict, message: str) -> bool:
+def _send_meta(cfg: dict, message: str, buttons: list = None) -> bool:
     """WhatsApp Cloud API oficial da Meta.
 
     Requisitos:
@@ -94,12 +107,41 @@ def _send_meta(cfg: dict, message: str) -> bool:
         return False
     version = cfg.get("api_version", "v21.0")
     url = f"https://graph.facebook.com/{version}/{phone_id}/messages"
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number.replace("whatsapp:", "").replace("+", ""),
-        "type": "text",
-        "text": {"preview_url": False, "body": message},
-    }
+    
+    # Monta o payload
+    if buttons and len(buttons) > 0:
+        # Mensagem interativa com botões (limitado a 3 botões pela Meta)
+        botoes_limite = buttons[:3]
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_number.replace("whatsapp:", "").replace("+", ""),
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": message},
+                "action": {
+                    "buttons": [
+                        {
+                            "type": "reply",
+                            "reply": {
+                                "id": btn["id"],
+                                "title": btn["title"][:20]  # Meta limita a 20 chars
+                            }
+                        }
+                        for btn in botoes_limite
+                    ]
+                }
+            }
+        }
+    else:
+        # Mensagem simples de texto
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_number.replace("whatsapp:", "").replace("+", ""),
+            "type": "text",
+            "text": {"preview_url": False, "body": message},
+        }
+    
     resp = requests.post(
         url,
         headers={"Authorization": f"Bearer {token}"},

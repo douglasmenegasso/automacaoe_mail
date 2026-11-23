@@ -493,8 +493,10 @@ def handle_button_click(button_id: str, wa_id: str):
         return _cmd_lixeira()
     
     # Limpeza por data
-    if tipo == "confirmar_limpar":
-        return _executar_limpar(valor)
+   if tipo == "limpar_trash":
+      return _executar_limpar(valor, "trash")
+   if tipo == "limpar_perm":
+      return _executar_limpar(valor, "perm")
     
     # Lixeira
     if tipo.startswith("lixeira_item"):

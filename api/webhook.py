@@ -289,6 +289,7 @@ def _cmd_ultimos(n):
 # ============================================================
 
 def _cmd_limpar(data_str):
+    """Pergunta QUAL TIPO DE EXCLUSÃO antes de executar."""
     try:
         from datetime import datetime
         datetime.strptime(data_str.strip(), "%d/%m/%Y")
@@ -306,20 +307,21 @@ def _cmd_limpar(data_str):
     
     confirm_texto = (
         f"⚠️ *ATENÇÃO*\n"
-        f"Vou apagar PERMANENTEMENTE {len(ids)} emails DA CAIXA DE ENTRADA anteriores a {data_str}.\n\n"
-        f"(Só emails com etiqueta AutoMail. Não afeta Spam/Lixeira.)\n\n"
-        f"Essa ação NÃO pode ser desfeita."
+        f"Encontrei {len(ids)} emails DA CAIXA DE ENTRADA anteriores a {data_str}.\n\n"
+        f"Como deseja apagar?"
     )
-    confirm_buttons = [
-        {"id": f"confirmar_limpar::{data_str}", "title": "✅ Confirmar apagar"},
+    buttons = [
+        {"id": f"limpar_trash::{data_str}", "title": "♻️ Ir pra Lixeira"},
+        {"id": f"limpar_perm::{data_str}", "title": "💀 Apagar Permanente"},
         {"id": "cancelar", "title": "❌ Cancelar"},
     ]
-    return confirm_texto, confirm_buttons, None
+    return confirm_texto, buttons, None
 
 
-def _executar_limpar(data_str):
+def _executar_limpar(data_str, modo):
+    """EXECUTA a limpeza após confirmação. Modo: 'trash' ou 'perm'."""
     s = _gmail()
-    q = _query_limpeza(data_str)  # ← MESMA query usada na contagem
+    q = _query_limpeza(data_str)
     
     resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
     ids = resp.get("messages", [])
@@ -327,17 +329,33 @@ def _executar_limpar(data_str):
     if not ids:
         return "🤷 Nenhum email para apagar (estado mudou desde a confirmação?).", None, None
     
-    apagados = 0
+    processados = 0
     errors = 0
+    
     for item in ids:
         try:
-            s.users().messages().delete(userId="me", id=item["id"]).execute()
-            apagados += 1
+            if modo == "trash":
+                # Move para lixeira (recuperável por 30 dias)
+                s.users().messages().trash(
+                    userId="me", id=item["id"]).execute()
+            else:
+                # Apaga permanentemente (irreversível)
+                s.users().messages().delete(
+                    userId="me", id=item["id"]).execute()
+            
+            processados += 1
         except Exception:
             errors += 1
     
-    texto = f"🗑️ *Limpeza concluída*\n━━━━━━━━━━━━━━━━━━\nEmails apagados: {apagados}\nErros: {errors}\nData limite: {data_str}"
-    return texto, None, None
+    emoji = "♻️" if modo == "trash" else "💀"
+    texto_resultado = (
+        f"{emoji} *Limpeza concluída*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Emails {'movidos à lixeira' if modo == 'trash' else 'apagados permanentemente'}: {processados}\n"
+        f"Erros: {errors}\n"
+        f"Data limite: {data_str}"
+    )
+    return texto_resultado, None, None
 
 
 # ============================================================

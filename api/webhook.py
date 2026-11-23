@@ -185,19 +185,51 @@ def _cmd_verificar():
     return f"⚠️ Falha ao disparar ({r.status_code})", None, None
 
 
+def _descobrir_pastas(service):
+    """Lê as etiquetas do Gmail e retorna só as que são sub-pastas de AutoMail."""
+    resp = service.users().labels().list(userId="me").execute()
+    id2name = {lb["id"]: lb["name"] for lb in resp.get("labels", [])}
+    
+    # Pega o ID da etiqueta pai "AutoMail"
+    pai_id = None
+    for lid, nome in id2name.items():
+        if nome.lower() == LABEL.lower():
+            pai_id = lid
+            break
+    
+    if not pai_id:
+        return []
+    
+    # Filtra só as sub-etiquetas (começam com "AutoMail/")
+    pastas_encontradas = []
+    for lid, nome in id2name.items():
+        if nome.startswith(f"{LABEL}/"):
+            pasta_nome = nome.split("/", 1)[1]  # Remove "AutoMail/"
+            pastas_encontradas.append((pasta_nome, lid))
+    
+    return sorted(pastas_encontradas)
+
+
 def _cmd_status():
     s = _gmail()
+    pastas = _descobrir_pastas(s)
+    
+    if not pastas:
+        return "📊 *Status*\n━━━━━━━━━━━━━━━━━━\nNenhuma pasta encontrada.", None, None
+    
     linhas = []
     total = 0
-    for nome in SUBPASTAS:
-        lid = _label_id(s, f"{LABEL}/{nome}")
-        if not lid:
-            continue
-        resp = s.users().messages().list(userId="me", q=f"label:{lid}",
-                                         maxResults=500).execute()
+    for nome_pasta, label_id in pastas:
+        # Conta os emails nessa pasta específica
+        resp = s.users().messages().list(
+            userId="me", 
+            q=f"label:{label_id}",
+            maxResults=500
+        ).execute()
         count = len(resp.get("messages", []))
-        linhas.append(f"• {nome}: {count}")
+        linhas.append(f"• {nome_pasta}: {count}")
         total += count
+    
     texto = f"📊 *Status* (total: {total})\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(linhas)
     return texto, None, None
 

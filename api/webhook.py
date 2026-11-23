@@ -19,8 +19,7 @@ GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "automail.yml")
 GMAIL_TOKEN_JSON = os.environ.get("GMAIL_TOKEN", "{}")
 
 LABEL = "AutoMail"
-SUBPASTAS = ["Spam", "Atencao", "Seguranca", "Financeiro", "Bancos",
-             "Pessoal", "Trabalho", "Outros", "Respostas"]
+
 RULES_FILE_LOCAL = "/tmp/rules.json"
 
 

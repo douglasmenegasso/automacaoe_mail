@@ -209,6 +209,18 @@ def _descobrir_pastas(service):
     return sorted(pastas_encontradas)
 
 
+def _descobrir_pastas(service):
+    """Lê as etiquetas do Gmail e retorna só as sub-pastas de AutoMail."""
+    resp = service.users().labels().list(userId="me").execute()
+    pastas_encontradas = []
+    for lb in resp.get("labels", []):
+        nome = lb["name"]
+        if nome.startswith(f"{LABEL}/"):
+            pasta_nome = nome.split("/", 1)[1]  # Remove "AutoMail/"
+            pastas_encontradas.append((pasta_nome, nome))
+    return sorted(pastas_encontradas)
+
+
 def _cmd_status():
     s = _gmail()
     pastas = _descobrir_pastas(s)
@@ -218,11 +230,12 @@ def _cmd_status():
     
     linhas = []
     total = 0
-    for nome_pasta, label_id in pastas:
-        # Conta os emails nessa pasta específica
+    for nome_pasta, nome_label_completo in pastas:
+        # Conta por NOME da label (não por ID)
+        q = f'label:"{nome_label_completo}" -in:sent -in:chat'
         resp = s.users().messages().list(
             userId="me", 
-            q=f"label:{label_id}",
+            q=q,
             maxResults=500
         ).execute()
         count = len(resp.get("messages", []))

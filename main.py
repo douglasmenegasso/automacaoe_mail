@@ -5,6 +5,8 @@ Uso:
     python main.py --dry-run  # simula: nao apaga, nao responde, nao etiqueta nada
 """
 import base64
+import json
+import os
 import sys
 import time
 from email.mime.text import MIMEText
@@ -18,12 +20,40 @@ from gmail_client import build_service, extract_email_data
 from whatsapp_notifier import send_whatsapp
 
 LABEL_NOME = "AutoMail"
+RULES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json")
 
 _EMOJI_PASTA = {
     "Seguranca": "🔒", "Financeiro": "💰", "Bancos": "🏦", "Vagas": "💼",
     "Pessoal": "👤", "Contas": "🧾", "Fornecedores": "📦", "Trabalho": "🛠️",
     "Outros": "📁", "Atencao": "🙋",
 }
+
+
+def _load_rules() -> dict:
+    """Carrega regras persistentes (remetentes bloqueados/confiáveis)."""
+    try:
+        with open(RULES_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"blocked_senders": [], "trusted_senders": []}
+
+
+def _save_rules(rules: dict):
+    """Salva regras persistentes."""
+    with open(RULES_FILE, "w", encoding="utf-8") as f:
+        json.dump(rules, f, indent=2, ensure_ascii=False)
+
+
+def _check_sender_rule(sender: str, rules: dict) -> str | None:
+    """Verifica se o remetente tem regra fixa. Retorna categoria ou None."""
+    sender_lower = sender.lower().strip()
+    for blocked in rules.get("blocked_senders", []):
+        if blocked.lower().strip() == sender_lower:
+            return "spam_propaganda"
+    for trusted in rules.get("trusted_senders", []):
+        if trusted.lower().strip() == sender_lower:
+            return "precisa_humano"  # Nunca spam, sempre humano
+    return None
 
 
 def _formatar_data(data_str: str) -> str:
@@ -37,13 +67,19 @@ def _formatar_data(data_str: str) -> str:
         return data_str[:20]
 
 
-def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> str:
+def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> tuple[str, list]:
+    """Monta o alerta do WhatsApp com visual de produto + botões.
+    
+    Returns:
+        (texto_da_mensagem, lista_de_botoes)
+    """
     assunto = data["subject"]
     if len(assunto) > 80:
         assunto = assunto[:77] + "..."
     resumo = (resultado.get("resumo_para_whatsapp") or resultado["motivo"]).strip()
     data_formatada = _formatar_data(data.get("date", ""))
-    return (
+    
+    texto = (
         f"{emoji} *{pasta_nome.upper()}*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"*De:* {data['from']}\n"
@@ -51,6 +87,15 @@ def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> 
         f"*Data:* {data_formatada}\n\n"
         f"{resumo}"
     )
+    
+    # Botões interativos (máx 3, título máx 20 chars)
+    buttons = [
+        {"id": f"seguro::{data['from']}", "title": "✅ Marcar Seguro"},
+        {"id": f"spam_remetente::{data['from']}", "title": "🚫 Spam Remetente"},
+        {"id": f"mover_pasta::{data['id']}", "title": "📁 Mover Pasta"},
+    ]
+    
+    return texto, buttons
 
 
 def _get_or_create_label_path(service, label_path: str) -> str:
@@ -128,6 +173,7 @@ def run(dry_run: bool):
     service = build_service()
     gcfg = cfg["gmail"]
     pausa = cfg.get("ai", {}).get("pausa_entre_emails", 4)
+    rules = _load_rules()
 
     query = f"{gcfg.get('query', 'in:inbox')} -label:{LABEL_NOME}"
     resp = service.users().messages().list(
@@ -156,11 +202,22 @@ def run(dry_run: bool):
                 print(f"    [LIMPEZA] {data['subject']} -> mantido {alvo}")
                 continue
 
-            resultado = classify_email(data, cfg)
-            cat = resultado["categoria"]
+            # Verifica regra fixa antes de chamar a IA
+            regra_fixa = _check_sender_rule(data["from"], rules)
+            if regra_fixa:
+                resultado = {"categoria": regra_fixa, "motivo": f"Regra fixa aplicada (remetente: {data['from']})",
+                             "resumo_para_whatsapp": "Classificado automaticamente por regra.",
+                             "pasta_sugerida": "", "resposta": ""}
+                cat = regra_fixa
+                print(f"\n--- De: {data['from']} | Assunto: {data['subject']}")
+                print(f"    categoria: {cat} | motivo: REGRA FIXA (economizei crédito de IA)")
+            else:
+                resultado = classify_email(data, cfg)
+                cat = resultado["categoria"]
+                print(f"\n--- De: {data['from']} | Assunto: {data['subject']}")
+                print(f"    categoria: {cat} | motivo: {resultado['motivo']}")
+
             cont[cat] += 1
-            print(f"\n--- De: {data['from']} | Assunto: {data['subject']}")
-            print(f"    categoria: {cat} | motivo: {resultado['motivo']}")
 
             if cat == "spam_propaganda":
                 label_alvo = "AutoMail/Spam"
@@ -193,8 +250,10 @@ def run(dry_run: bool):
                 else:
                     pasta_nome = label_alvo.split("/")[-1]
                     emoji = _EMOJI_PASTA.get(pasta_nome, "📁")
-                    aviso = _format_alerta(data, resultado, pasta_nome, emoji)
-                    if send_whatsapp(cfg, aviso):
+                    aviso_texto, botao_list = _format_alerta(data, resultado, pasta_nome, emoji)
+                    
+                    # Envia com botões interativos
+                    if send_whatsapp(cfg, aviso_texto, buttons=botao_list):
                         cont["acoes"] += 1
                     else:
                         print("    [AVISO] falha ao notificar WhatsApp")

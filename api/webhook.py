@@ -165,11 +165,11 @@ def _cmd_menu_comandos():
         {"id": "cmd_verificar", "title": "🔄 Verificar", "description": "Analisa a caixa agora"},
         {"id": "cmd_status", "title": "📊 Status", "description": "Resumo das pastas"},
         {"id": "cmd_ultimos::5", "title": "📥 Últimos 5", "description": "Lista os 5 recentes"},
-        {"id": "menu_lixeira", "title": "🗑️ Lixeira", "description": "Ver / recuperar / apagar"},
+        {"id": "menu_lixeira", "title": "🗑️ Lixeira", "description": "Ver / recuperar recentes"},
         {"id": "cmd_naospam", "title": "✅ Não é spam", "description": "Tira do Spam (precisa termo)"},
         {"id": "cmd_mover_help", "title": "📁 Mover", "description": "Move email (termo + pasta)"},
         {"id": "cmd_arquivar_help", "title": "🗃️ Arquivar", "description": "Tira da entrada (precisa termo)"},
-        {"id": "cmd_limpar_help", "title": "🧹 Limpar por data", "description": "Exclui antigos (precisa data)"},
+        {"id": "cmd_limpar_help", "title": "🧹 Limpar por data", "description": "Lixeira ou permanente"},
     ]
     return texto, None, list_rows
 
@@ -272,7 +272,7 @@ def _cmd_ultimos(n):
 
 
 # ============================================================
-# LIMPEZA POR DATA (escolhe Lixeira ou Permanente)
+# LIMPEZA POR DATA (Lixeira OU Permanente — ambos funcionam)
 # ============================================================
 
 def _cmd_limpar(data_str):
@@ -342,7 +342,7 @@ def _executar_limpar(data_str, modo):
 
 
 # ============================================================
-# LIXEIRA
+# LIXEIRA (só os mais recentes + recuperar; definitivo é no Gmail)
 # ============================================================
 
 def _cmd_lixeira(termo=""):
@@ -351,7 +351,7 @@ def _cmd_lixeira(termo=""):
     if termo:
         q += f" {termo}"
 
-    resp = s.users().messages().list(userId="me", q=q, maxResults=20).execute()
+    resp = s.users().messages().list(userId="me", q=q, maxResults=10).execute()
     items = resp.get("messages", [])
 
     if not items:
@@ -372,7 +372,9 @@ def _cmd_lixeira(termo=""):
             "description": remetente,
         })
 
-    return "🗑️ Escolha um email da lixeira:", None, list_rows
+    texto = ("🗑️ Os 10 mais recentes da lixeira.\n"
+             "Lista completa e exclusão definitiva: abra o Gmail.")
+    return texto, None, list_rows
 
 
 def _cmd_lixeira_item(msg_id):
@@ -390,42 +392,9 @@ def _cmd_lixeira_item(msg_id):
     )
     buttons = [
         {"id": f"lixeira_recuperar::{msg_id}", "title": "♻️ Recuperar"},
-        {"id": f"lixeira_apagar::{msg_id}", "title": "❌ Apagar def."},
         {"id": "cmd_lixeira", "title": "↩️ Voltar"},
     ]
     return texto, buttons, None
-
-
-def _cmd_lixeira_esvaziar():
-    s = _gmail()
-    resp = s.users().messages().list(userId="me", q="in:trash", maxResults=500).execute()
-    ids = resp.get("messages", [])
-
-    if not ids:
-        return "🗑️ Lixeira já está vazia!", None, None
-
-    texto = f"⚠️ Vou excluir PERMANENTEMENTE {len(ids)} emails da lixeira. Confirma?"
-    buttons = [
-        {"id": "confirmar_esvaziar", "title": "✅ Sim, apagar tudo"},
-        {"id": "cancelar", "title": "❌ Cancelar"},
-    ]
-    return texto, buttons, None
-
-
-def _executar_esvaziar():
-    s = _gmail()
-    resp = s.users().messages().list(userId="me", q="in:trash", maxResults=500).execute()
-    ids = resp.get("messages", [])
-
-    apagados = 0
-    for item in ids:
-        try:
-            s.users().messages().delete(userId="me", id=item["id"]).execute()
-            apagados += 1
-        except Exception:
-            pass
-
-    return f"🗑️ Lixeira esvaziada! {apagados} emails excluídos permanentemente.", None, None
 
 
 # ============================================================
@@ -491,7 +460,7 @@ def handle_button_click(button_id: str, wa_id: str):
     if tipo == "limpar_perm":
         return _executar_limpar(valor, "perm")
 
-    # Lixeira
+    # Lixeira (só recuperar; exclusão definitiva é no Gmail)
     if tipo.startswith("lixeira_item"):
         return _cmd_lixeira_item(valor)
     if tipo.startswith("lixeira_recuperar"):
@@ -502,18 +471,6 @@ def handle_button_click(button_id: str, wa_id: str):
             return "✅ Email recuperado da lixeira!", None, None
         except Exception as e:
             return f"❌ Erro: {str(e)[:50]}", None, None
-    if tipo.startswith("lixeira_apagar"):
-        msg_id = valor
-        s = _gmail()
-        try:
-            s.users().messages().delete(userId="me", id=msg_id).execute()
-            return "✅ Email excluído PERMANENTEMENTE.", None, None
-        except Exception as e:
-            return f"❌ Erro: {str(e)[:50]}", None, None
-    if tipo == "confirmar_esvaziar":
-        return _executar_esvaziar()
-    if tipo == "cmd_esvaziar":
-        return _cmd_lixeira_esvaziar()
 
     # Regras de remetentes
     if tipo == "seguro":
@@ -691,8 +648,6 @@ class handler(BaseHTTPRequestHandler):
             reply_result = _cmd_limpar(data_arg)
         elif t == "lixeira":
             reply_result = _cmd_lixeira()
-        elif t.startswith("lixeira esvaziar"):
-            reply_result = _cmd_lixeira_esvaziar()
         elif t.startswith("lixeira ") and len(t) > 8:
             termo = text[len("lixeira"):].strip()
             reply_result = _cmd_lixeira(termo)

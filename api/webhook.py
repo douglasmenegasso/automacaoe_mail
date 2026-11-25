@@ -319,6 +319,7 @@ def _executar_limpar(data_str, modo):
 
     processados = 0
     errors = 0
+    primeiro_erro = ""
     for item in ids:
         try:
             if modo == "trash":
@@ -326,8 +327,11 @@ def _executar_limpar(data_str, modo):
             else:
                 s.users().messages().delete(userId="me", id=item["id"]).execute()
             processados += 1
-        except Exception:
+        except Exception as e:
             errors += 1
+            if not primeiro_erro:
+                primeiro_erro = str(e)[:200]
+                print(f"[LIMPAR] primeiro erro: {e}")
 
     emoji = "♻️" if modo == "trash" else "💀"
     destino = "movidos à lixeira" if modo == "trash" else "excluídos permanentemente"
@@ -338,6 +342,8 @@ def _executar_limpar(data_str, modo):
         f"Erros: {errors}\n"
         f"Data limite: {data_str}"
     )
+    if primeiro_erro:
+        texto += f"\n\n🔎 Motivo do 1º erro:\n{primeiro_erro}"
     return texto, None, None
 
 

@@ -1,0 +1,33 @@
+name: cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Data limite dd/mm/aaaa"
+        required: true
+      mode:
+        description: "trash ou perm"
+        required: true
+        default: "trash"
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Dependencias
+        run: pip install -r requirements.txt
+      - name: Criar config.json
+        run: echo "$CONFIG_JSON" > config.json
+        env:
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
+      - name: Exclusao em massa
+        env:
+          GMAIL_TOKEN: ${{ secrets.GMAIL_TOKEN }}
+          META_WA_ACCESS_TOKEN: ${{ secrets.META_WA_ACCESS_TOKEN }}
+          META_WA_PHONE_NUMBER_ID: ${{ secrets.META_WA_PHONE_NUMBER_ID }}
+        run: python cleanup.py "${{ inputs.date }}" "${{ inputs.mode }}"

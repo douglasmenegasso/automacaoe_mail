@@ -1,50 +1,75 @@
 """Autenticação na API do Gmail (OAuth2).
 
-Pré-requisitos:
-1. Acesse https://console.cloud.google.com/ e crie um projeto.
-2. Ative a "Gmail API".
-3. Configure a tela de consentimento OAuth (tipo Externo, adicione seu e-mail como test user).
-4. Baixe o JSON de credenciais do tipo "Desktop app" e salve como credentials.json neste diretório.
-5. Rode: python gmail_client.py --login  (abrirá o navegador para autorizar; gera token.json)
+Em PRODUÇÃO (GitHub Actions / Vercel):
+  Lê o JSON direto da variável de ambiente GMAIL_TOKEN.
+
+LOCAL (desenvolvimento):
+  Use: python gmail_client.py --login
+  Gera token.json após autorização no navegador.
 """
-import base64
+import json
 import os
 import sys
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-# Escopos: leitura, envio, exclusão e modificação de labels (arquivar/marcar lido)
+# (Escopos mantidos apenas para referência / --login local;
+#  em produção o refresh NÃO repassa escopos para evitar invalid_scope.)
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.modify",
+    "https://mail.google.com/",
 ]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_JSON = os.path.join(BASE_DIR, "credentials.json")
 TOKEN_JSON = os.path.join(BASE_DIR, "token.json")
 
 
-def get_credentials() -> Credentials:
-    creds = None
+def _load_token_info() -> dict:
+    """Retorna o dict com o JSON do token.
+
+    Prioridade:
+      1. Variável de ambiente GMAIL_TOKEN (produção)
+      2. Arquivo token.json (desenvolvimento)
+    Lança SystemExit se nenhum dos dois existir.
+    """
+    env_token = os.environ.get("GMAIL_TOKEN", "").strip()
+    if env_token:
+        try:
+            return json.loads(env_token)
+        except json.JSONDecodeError as e:
+            sys.exit(f"[ERRO] GMAIL_TOKEN não é JSON válido: {e}")
+
     if os.path.exists(TOKEN_JSON):
-           creds = Credentials.from_authorized_user_info(info)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+        with open(TOKEN_JSON, encoding="utf-8") as f:
+            return json.load(f)
+
+    sys.exit(
+        "[ERRO] Nenhuma credencial encontrada.\n"
+        "• Produção: defina a variável GMAIL_TOKEN.\n"
+        "• Local: rode 'python gmail_client.py --login'."
+    )
+
+
+def get_credentials() -> Credentials:
+    """Monta a credencial OAuth a partir do token (env ou arquivo).
+
+    - NÃO repassa SCOPES no refresh (evita invalid_scope do Google).
+    - Faz refresh automático se o access_token expirou.
+    """
+    info = _load_token_info()
+    # Sem passar SCOPES: usa os escopos que já vieram no token original.
+    creds = Credentials.from_authorized_user_info(info)
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            if not os.path.exists(CREDENTIALS_JSON):
-                sys.exit(
-                    f"[ERRO] {CREDENTIALS_JSON} não encontrado.\n"
-                    "Baixe as credenciais OAuth (Desktop app) no Google Cloud Console."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_JSON, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_JSON, "w", encoding="utf-8") as f:
-            f.write(creds.to_json())
+            sys.exit(
+                "[ERRO] Credencial inválida e sem refresh_token.\n"
+                "Gere um novo token e atualize GMAIL_TOKEN."
+            )
+
     return creds
 
 
@@ -54,6 +79,8 @@ def build_service():
 
 def extract_email_data(msg: dict) -> dict:
     """Extrai campos úteis de uma mensagem da API do Gmail."""
+    import base64
+
     headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
 
     body_parts = []
@@ -86,9 +113,27 @@ def extract_email_data(msg: dict) -> dict:
     }
 
 
+def _do_local_login():
+    """Fluxo de login local (navegador). Salva token.json."""
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    credentials_json = os.path.join(BASE_DIR, "credentials.json")
+    if not os.path.exists(credentials_json):
+        sys.exit(
+            f"[ERRO] {credentials_json} não encontrado.\n"
+            "Baixe as credenciais OAuth (Desktop app) no Google Cloud Console."
+        )
+
+    flow = InstalledAppFlow.from_client_secrets_file(credentials_json, SCOPES)
+    creds = flow.run_local_server(port=0)
+
+    with open(TOKEN_JSON, "w", encoding="utf-8") as f:
+        f.write(creds.to_json())
+    print("[OK] Autorização concluída. token.json gerado.")
+
+
 if __name__ == "__main__":
     if "--login" in sys.argv:
-        get_credentials()
-        print("[OK] Autorização concluída. token.json gerado.")
+        _do_local_login()
     else:
         print("Uso: python gmail_client.py --login")

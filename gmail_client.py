@@ -31,8 +31,7 @@ TOKEN_JSON = os.path.join(BASE_DIR, "token.json")
 def get_credentials() -> Credentials:
     creds = None
     if os.path.exists(TOKEN_JSON):
-        creds = Credentials.from_authorized_user_file(TOKEN_JSON, SCOPES)
-
+           creds = Credentials.from_authorized_user_info(info)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())

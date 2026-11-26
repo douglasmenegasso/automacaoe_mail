@@ -307,45 +307,42 @@ def _cmd_limpar(data_str):
 
 
 def _executar_limpar(data_str, modo):
-    """Executa a exclusão após confirmação. Modo: 'trash' ou 'perm'."""
+    """Agenda a exclusão no GitHub Actions e avisa na hora; o Actions notifica ao concluir."""
     s = _gmail()
     q = _query_limpeza(data_str)
 
-    resp = s.users().messages().list(userId="me", q=q, maxResults=500).execute()
-    ids = resp.get("messages", [])
+    total = 0
+    page = None
+    while True:
+        kwargs = {"pageToken": page} if page else {}
+        resp = s.users().messages().list(
+            userId="me", q=q, maxResults=500, **kwargs).execute()
+        total += len(resp.get("messages", []))
+        page = resp.get("nextPageToken")
+        if not page:
+            break
 
-    if not ids:
-        return "🤷 Nenhum email para excluir (estado mudou desde a confirmação?).", None, None
+    if total == 0:
+        return f"🤷 Nenhum email na caixa de entrada antes de {data_str}.", None, None
 
-    processados = 0
-    errors = 0
-    primeiro_erro = ""
-    for item in ids:
-        try:
-            if modo == "trash":
-                s.users().messages().trash(userId="me", id=item["id"]).execute()
-            else:
-                s.users().messages().delete(userId="me", id=item["id"]).execute()
-            processados += 1
-        except Exception as e:
-            errors += 1
-            if not primeiro_erro:
-                primeiro_erro = str(e)[:200]
-                print(f"[LIMPAR] primeiro erro: {e}")
-
-    emoji = "♻️" if modo == "trash" else "💀"
-    destino = "movidos à lixeira" if modo == "trash" else "excluídos permanentemente"
-    texto = (
-        f"{emoji} *Limpeza concluída*\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"Emails {destino}: {processados}\n"
-        f"Erros: {errors}\n"
-        f"Data limite: {data_str}"
+    r = requests.post(
+        f"https://api.github.com/repos/{GITHUB_REPO}"
+        f"/actions/workflows/cleanup.yml/dispatches",
+        headers={"Authorization": f"token {GITHUB_PAT}",
+                 "Accept": "application/vnd.github+json"},
+        json={"ref": "main", "inputs": {"date": data_str, "mode": modo}},
     )
-    if primeiro_erro:
-        texto += f"\n\n🔎 Motivo do 1º erro:\n{primeiro_erro}"
-    return texto, None, None
-
+    if r.status_code in (200, 204):
+        emoji = "♻️" if modo == "trash" else "💀"
+        modo_txt = "Lixeira" if modo == "trash" else "Permanente"
+        return (
+            f"🔄 *Exclusão agendada*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{total} emails anteriores a {data_str}\n"
+            f"Modo: {modo_txt} {emoji}\n\n"
+            f"Vou te avisar aqui quando concluir."
+        ), None, None
+    return f"⚠️ Falha ao agendar ({r.status_code})", None, None
 
 # ============================================================
 # LIXEIRA (só os mais recentes + recuperar; definitivo é no Gmail)

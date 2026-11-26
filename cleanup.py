@@ -1,9 +1,20 @@
 """Exclusão em massa por data, rodada no GitHub Actions (sem limite de 30s)."""
+import json
+import os
 import sys
 
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+
 import settings
-from gmail_client import build_service
 from whatsapp_notifier import send_whatsapp
+
+
+def _gmail():
+    """Monta o serviço Gmail direto da variável GMAIL_TOKEN (sem credentials.json)."""
+    creds = Credentials.from_authorized_user_info(
+        json.loads(os.environ.get("GMAIL_TOKEN", "{}")))
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
 def _query(data_str):
@@ -14,7 +25,7 @@ def _query(data_str):
 
 def run(data_str, modo):
     cfg = settings.load_config()
-    service = build_service()
+    service = _gmail()
     q = _query(data_str)
 
     processados = 0

@@ -1,9 +1,149 @@
 <!doctype html>
 <html lang="pt-BR">
-<head><meta charset="utf-8"><title>AutoMail</title></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoMail — assistente pessoal de e-mails</title>
+<meta name="description" content="AutoMail: assistente pessoal e privado que organiza, classifica e limpa sua caixa de entrada sob seu comando.">
+<style>
+  :root{
+    --bg:#0b0e1a; --surface:#141a2e; --overlay:#1b2340;
+    --ink:#eef1ff; --muted:#9aa3c7;
+    --violet:#7c5cff; --amber:#ffb020; --teal:#2dd4bf; --rose:#ff5c8a;
+    --line:rgba(124,92,255,.28);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:16px/1.65 "Segoe UI",system-ui,-apple-system,sans-serif;
+    overflow-x:hidden;
+  }
+  ::selection{background:var(--violet);color:#fff}
+  /* scrollbar própria */
+  html{scrollbar-width:thin;scrollbar-color:var(--violet) var(--surface)}
+  ::-webkit-scrollbar{width:10px}
+  ::-webkit-scrollbar-track{background:var(--surface)}
+  ::-webkit-scrollbar-thumb{background:linear-gradient(var(--violet),var(--teal));border-radius:8px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--amber)}
+
+  .sky{position:fixed;inset:0;z-index:-2;overflow:hidden}
+  .sky i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.5;animation:drift 26s ease-in-out infinite alternate}
+  .sky i:nth-child(1){width:52vw;height:52vw;left:-14vw;top:-18vw;background:radial-gradient(circle,var(--violet),transparent 65%)}
+  .sky i:nth-child(2){width:44vw;height:44vw;right:-12vw;top:6vh;background:radial-gradient(circle,var(--teal),transparent 65%);animation-delay:-9s}
+  .sky i:nth-child(3){width:38vw;height:38vw;left:22vw;bottom:-20vw;background:radial-gradient(circle,var(--amber),transparent 65%);opacity:.32;animation-delay:-16s}
+  @keyframes drift{to{transform:translate3d(6vw,4vh,0) scale(1.12)}}
+  .grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.07;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+  header{position:fixed;top:0;left:0;right:0;z-index:10;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px clamp(18px,5vw,64px);
+    background:rgba(11,14,26,.72);backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line)}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.4px}
+  .logo b{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--violet),var(--teal));color:#0b0e1a;font-size:15px}
+  nav{display:flex;gap:22px;align-items:center}
+  nav a{color:var(--muted);text-decoration:none;font-size:14px;transition:color .2s}
+  nav a:hover{color:var(--amber)}
+  nav a.cta{color:#0b0e1a;background:linear-gradient(90deg,var(--amber),var(--rose));
+    padding:8px 16px;border-radius:999px;font-weight:600}
+  nav a.cta:hover{filter:brightness(1.1);color:#0b0e1a}
+
+  main{max-width:1060px;margin:0 auto;padding:150px clamp(18px,5vw,32px) 80px}
+  .badge{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;letter-spacing:1.4px;
+    text-transform:uppercase;color:var(--teal);border:1px solid rgba(45,212,191,.4);
+    padding:6px 14px;border-radius:999px;background:rgba(45,212,191,.08)}
+  .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--teal);
+    box-shadow:0 0 12px var(--teal);animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  h1{font-size:clamp(34px,6vw,60px);line-height:1.1;margin:22px 0 18px;font-weight:800}
+  h1 em{font-style:normal;background:linear-gradient(90deg,var(--violet),var(--teal),var(--amber));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .lead{color:var(--muted);font-size:clamp(16px,2.2vw,19px);max-width:62ch}
+  .actions{display:flex;gap:14px;flex-wrap:wrap;margin:32px 0 64px}
+  .btn{padding:13px 26px;border-radius:12px;text-decoration:none;font-weight:600;font-size:15px;
+    transition:transform .18s,box-shadow .18s}
+  .btn:hover{transform:translateY(-2px)}
+  .btn.solid{background:linear-gradient(90deg,var(--violet),var(--rose));color:#fff;
+    box-shadow:0 8px 30px rgba(124,92,255,.35)}
+  .btn.ghost{border:1px solid var(--line);color:var(--ink);background:rgba(20,26,46,.6)}
+  .btn.ghost:hover{border-color:var(--teal);box-shadow:0 8px 26px rgba(45,212,191,.2)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+  .card{background:linear-gradient(160deg,var(--surface),var(--overlay));
+    border:1px solid var(--line);border-radius:18px;padding:26px;
+    transition:transform .25s,border-color .25s;position:relative;overflow:hidden}
+  .card::after{content:"";position:absolute;inset:auto -30% -55% auto;width:70%;height:70%;
+    background:radial-gradient(circle,var(--glow,var(--violet)),transparent 70%);opacity:.16;filter:blur(30px)}
+  .card:hover{transform:translateY(-5px);border-color:var(--glow,var(--violet))}
+  .card .ic{font-size:26px;width:52px;height:52px;border-radius:14px;display:grid;place-items:center;
+    background:rgba(255,255,255,.05);border:1px solid var(--line);margin-bottom:16px}
+  .card h3{font-size:18px;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:14.5px}
+  .card:nth-child(2){--glow:var(--teal)}
+  .card:nth-child(3){--glow:var(--amber)}
+
+  .reveal{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s ease}
+  .reveal.on{opacity:1;transform:none}
+
+  footer{border-top:1px solid var(--line);margin-top:70px;padding:30px clamp(18px,5vw,32px);
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13.5px}
+  footer a{color:var(--teal);text-decoration:none}
+  footer a:hover{color:var(--amber)}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  @media (max-width:560px){nav a:not(.cta){display:none}}
+</style>
+</head>
 <body>
-  <h1>AutoMail</h1>
-  <p>Assistente pessoal de organização de e-mails (uso privado do proprietário).</p>
-  <p><a href="/privacidade.html">Política de Privacidade</a></p>
+<div class="sky" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="grain" aria-hidden="true"></div>
+
+<header>
+  <span class="logo"><b>✉</b> AutoMail</span>
+  <nav>
+    <a href="#recursos">Recursos</a>
+    <a href="privacidade.html">Privacidade</a>
+    <a class="cta" href="mailto:douglas.menegasso@gmail.com">Contato</a>
+  </nav>
+</header>
+
+<main>
+  <span class="badge reveal">uso pessoal &amp; privado</span>
+  <h1 class="reveal">Sua caixa de entrada, <em>organizada sob comando.</em></h1>
+  <p class="lead reveal">O AutoMail é um assistente pessoal que lê, classifica, etiqueta, arquiva e
+  limpa e-mails da sua própria conta Gmail — sempre a partir dos comandos que você envia.
+  Nada é vendido, nada é compartilhado.</p>
+  <div class="actions reveal">
+    <a class="btn solid" href="privacidade.html">Ler a Política de Privacidade</a>
+    <a class="btn ghost" href="#recursos">Ver o que ele faz</a>
+  </div>
+
+  <section id="recursos" class="grid">
+    <article class="card reveal"><div class="ic">🧠</div>
+      <h3>Classificação com IA</h3>
+      <p>Cada e-mail é analisado e receives a pasta certa: financeiro, bancos, segurança,
+      trabalho, pessoal e mais — automaticamente.</p></article>
+    <article class="card reveal"><div class="ic">🗂️</div>
+      <h3>Organização visível</h3>
+      <p>Etiquetas e pastas espelhadas no Gmail, com resumo do status de cada pasta
+      direto no seu WhatsApp.</p></article>
+    <article class="card reveal"><div class="ic">🧹</div>
+      <h3>Limpeza sob comando</h3>
+      <p>Exclusão em massa por data, com escolha entre lixeira (recuperável) ou
+      permanente — sempre com sua confirmação.</p></article>
+  </section>
+</main>
+
+<footer>
+  <span>© 2026 AutoMail — ferramenta de uso privado.</span>
+  <span><a href="privacidade.html">Política de Privacidade</a> · <a href="mailto:douglas.menegasso@gmail.com">douglas.menegasso@gmail.com</a></span>
+</footer>
+
+<script>
+  const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('on');io.unobserve(e.target)}}),{threshold:.15});
+  document.querySelectorAll('.reveal').forEach((el,i)=>{el.style.transitionDelay=(i%6)*70+'ms';io.observe(el)});
+</script>
 </body>
 </html>

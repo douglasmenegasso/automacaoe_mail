@@ -1,4 +1,6 @@
 {
-  "blocked_senders": [],
+  "blocked_senders": [
+    "Diretoria <contato@negociar.acerto.com.br>"
+  ],
   "trusted_senders": []
 }

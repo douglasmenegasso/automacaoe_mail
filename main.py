@@ -7,6 +7,7 @@ Uso:
 import base64
 import json
 import os
+import re
 import sys
 import time
 from email.mime.text import MIMEText
@@ -28,7 +29,6 @@ _EMOJI_PASTA = {
     "Outros": "📁", "Atencao": "🙋",
 }
 
-
 def _load_rules() -> dict:
     """Carrega regras persistentes (remetentes bloqueados/confiáveis)."""
     try:
@@ -37,24 +37,41 @@ def _load_rules() -> dict:
     except FileNotFoundError:
         return {"blocked_senders": [], "trusted_senders": []}
 
-
 def _save_rules(rules: dict):
     """Salva regras persistentes."""
     with open(RULES_FILE, "w", encoding="utf-8") as f:
         json.dump(rules, f, indent=2, ensure_ascii=False)
 
+def _extrair_email(texto: str) -> str:
+    """Retorna só o endereço de e-mail, ignorando o nome de exibição.
+
+    'Diretoria <contato@negociar.acerto.com.br>' -> 'contato@negociar.acerto.com.br'
+    'contato@negociar.acerto.com.br'             -> 'contato@negociar.acerto.com.br'
+    """
+    texto = (texto or "").strip().lower()
+    m = re.search(r"<([^>]+)>", texto)
+    if m:
+        texto = m.group(1)
+    return texto.strip().strip('"').strip()
 
 def _check_sender_rule(sender: str, rules: dict) -> str | None:
-    """Verifica se o remetente tem regra fixa. Retorna categoria ou None."""
-    sender_lower = sender.lower().strip()
+    """Verifica se o remetente tem regra fixa. Retorna categoria ou None.
+
+    Compara SOMENTE o endereço de e-mail (o que fica entre < >),
+    ignorando o nome de exibição. Assim:
+    - regras já gravadas com nome continuam funcionando sem migrar nada;
+    - se o remetente trocar o nome de exibição, o bloqueio continua pegando.
+    """
+    sender_email = _extrair_email(sender)
+    if not sender_email:
+        return None
     for blocked in rules.get("blocked_senders", []):
-        if blocked.lower().strip() == sender_lower:
+        if _extrair_email(blocked) == sender_email:
             return "spam_propaganda"
     for trusted in rules.get("trusted_senders", []):
-        if trusted.lower().strip() == sender_lower:
+        if _extrair_email(trusted) == sender_email:
             return "precisa_humano"  # Nunca spam, sempre humano
     return None
-
 
 def _formatar_data(data_str: str) -> str:
     if not data_str:
@@ -65,7 +82,6 @@ def _formatar_data(data_str: str) -> str:
         return dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
         return data_str[:20]
-
 
 def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> tuple[str, list]:
     """Monta o alerta do WhatsApp com visual de produto + botões."""
@@ -92,7 +108,6 @@ def _format_alerta(data: dict, resultado: dict, pasta_nome: str, emoji: str) -> 
     
     return texto, buttons
 
-
 def _get_or_create_label_path(service, label_path: str) -> str:
     resp = service.users().labels().list(userId="me").execute()
     existing = {lb["name"].lower(): lb["id"] for lb in resp.get("labels", [])}
@@ -111,7 +126,6 @@ def _get_or_create_label_path(service, label_path: str) -> str:
               "messageListVisibility": "show"}).execute()
     print(f"[GMAIL] Label '{label_path}' criada.")
     return novo["id"]
-
 
 def _apply_label(service, msg: dict, label_alvo: str):
     """Aplica a etiqueta alvo + a pai 'AutoMail', remove outras sub-etiquetas
@@ -133,19 +147,16 @@ def _apply_label(service, msg: dict, label_alvo: str):
         userId="me", id=msg["id"],
         body={"addLabelIds": adicionar, "removeLabelIds": remover}).execute()
 
-
 def _escolher_principal(nomes: list) -> str:
     """Se houver duplicadas, mantem a mais importante (nao-Spam)."""
     nao_spam = [n for n in nomes if n.lower() != "automail/spam"]
     return nao_spam[0] if nao_spam else nomes[0]
-
 
 def _header(msg: dict, nome: str) -> str:
     for h in msg.get("payload", {}).get("headers", []):
         if h["name"].lower() == nome.lower():
             return h["value"]
     return ""
-
 
 def _send_reply(service, data: dict, msg: dict, texto: str, de_email: str):
     message_id = _header(msg, "Message-ID")
@@ -161,7 +172,6 @@ def _send_reply(service, data: dict, msg: dict, texto: str, de_email: str):
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
     service.users().messages().send(
         userId="me", body={"raw": raw, "threadId": data["thread_id"]}).execute()
-
 
 def run(dry_run: bool):
     cfg = settings.load_config()
@@ -270,7 +280,6 @@ def run(dry_run: bool):
           f"precisa_humano: {cont['precisa_humano']}")
     print(f"acoes executadas: {cont['acoes']} | erros: {cont['erros']}")
     print(f"modo: {'DRY-RUN (nada foi alterado)' if dry_run else 'PRODUCAO'}")
-
 
 if __name__ == "__main__":
     run("--dry-run" in sys.argv)

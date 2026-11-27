@@ -9,6 +9,8 @@ import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from rules_store import load_rules, save_rules
+
 META_TOKEN = os.environ.get("META_WA_ACCESS_TOKEN", "")
 META_PHONE_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "")
 META_API = os.environ.get("META_API_VERSION", "v27.0")
@@ -21,7 +23,6 @@ GMAIL_TOKEN_JSON = os.environ.get("GMAIL_TOKEN", "{}")
 LABEL = "AutoMail"
 SUBPASTAS = ["Spam", "Atencao", "Seguranca", "Financeiro", "Bancos",
              "Pessoal", "Trabalho", "Outros", "Respostas", "Contas", "Vagas"]
-RULES_FILE_LOCAL = "/tmp/rules.json"
 
 
 def _gmail():
@@ -401,23 +402,6 @@ def _cmd_lixeira_item(msg_id):
 
 
 # ============================================================
-# REGRAS PERSISTENTES (volátil no Vercel /tmp)
-# ============================================================
-
-def _load_rules_local() -> dict:
-    try:
-        with open(RULES_FILE_LOCAL, encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"blocked_senders": [], "trusted_senders": []}
-
-
-def _save_rules_local(rules: dict):
-    with open(RULES_FILE_LOCAL, "w", encoding="utf-8") as f:
-        json.dump(rules, f, indent=2, ensure_ascii=False)
-
-
-# ============================================================
 # INTERPRETADOR DE CLIQUES EM BOTÕES / LISTAS
 # ============================================================
 
@@ -475,13 +459,13 @@ def handle_button_click(button_id: str, wa_id: str):
         except Exception as e:
             return f"❌ Erro: {str(e)[:50]}", None, None
 
-    # Regras de remetentes
+    # Regras de remetentes (agora persistidas no GitHub via rules_store)
     if tipo == "seguro":
         sender = valor
-        rules = _load_rules_local()
+        rules = load_rules()
         if sender not in rules.get("trusted_senders", []):
             rules.setdefault("trusted_senders", []).append(sender)
-            _save_rules_local(rules)
+            save_rules(rules)
         return f"✅ {sender} marcado como CONFIÁVEL.", None, None
 
     if tipo == "spam_remetente":
@@ -498,10 +482,10 @@ def handle_button_click(button_id: str, wa_id: str):
 
     if tipo == "confirmar_spam":
         sender = valor
-        rules = _load_rules_local()
+        rules = load_rules()
         if sender not in rules.get("blocked_senders", []):
             rules.setdefault("blocked_senders", []).append(sender)
-            _save_rules_local(rules)
+            save_rules(rules)
         return f"🚫 {sender} BLOQUEADO permanentemente.", None, None
 
     # Mover para pasta (LISTA dinâmica)

@@ -1,15 +1,92 @@
 <!doctype html>
 <html lang="pt-BR">
-<head><meta charset="utf-8"><title>Política de Privacidade — AutoMail</title></head>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de Privacidade — AutoMail</title>
+<style>
+  :root{--bg:#0b0e1a;--surface:#141a2e;--ink:#eef1ff;--muted:#9aa3c7;
+    --violet:#7c5cff;--amber:#ffb020;--teal:#2dd4bf;--line:rgba(124,92,255,.28)}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font:16px/1.75 "Segoe UI",system-ui,sans-serif}
+  html{scrollbar-width:thin;scrollbar-color:var(--violet) var(--surface)}
+  ::-webkit-scrollbar{width:10px}
+  ::-webkit-scrollbar-track{background:var(--surface)}
+  ::-webkit-scrollbar-thumb{background:linear-gradient(var(--violet),var(--teal));border-radius:8px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--amber)}
+  .sky{position:fixed;inset:0;z-index:-1;overflow:hidden}
+  .sky i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.4}
+  .sky i:nth-child(1){width:46vw;height:46vw;left:-14vw;top:-16vw;background:radial-gradient(circle,var(--violet),transparent 65%)}
+  .sky i:nth-child(2){width:40vw;height:40vw;right:-12vw;bottom:-14vw;background:radial-gradient(circle,var(--teal),transparent 65%)}
+  header{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;
+    padding:14px clamp(18px,5vw,64px);background:rgba(11,14,26,.75);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none;font-size:14px}
+  header a:hover{color:var(--amber)}
+  header .logo{color:var(--ink);font-weight:700}
+  main{max-width:760px;margin:0 auto;padding:130px clamp(18px,5vw,28px) 80px}
+  h1{font-size:clamp(28px,5vw,42px);margin-bottom:6px}
+  h1 em{font-style:normal;background:linear-gradient(90deg,var(--violet),var(--teal));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .upd{color:var(--amber);font-size:13.5px;letter-spacing:.6px;margin-bottom:34px}
+  section{background:linear-gradient(160deg,var(--surface),rgba(27,35,64,.7));border:1px solid var(--line);
+    border-radius:16px;padding:24px 26px;margin-bottom:16px}
+  h2{font-size:17px;color:var(--teal);margin-bottom:10px}
+  p,li{color:var(--muted);font-size:15px}
+  ul{padding-left:20px}
+  li{margin:6px 0}
+  strong{color:var(--ink)}
+  a{color:var(--teal)}
+  footer{color:var(--muted);font-size:13px;text-align:center;padding:26px}
+</style>
+</head>
 <body>
-  <h1>Política de Privacidade — AutoMail</h1>
-  <p>Última atualização: 27/11/2026</p>
-  <p>O AutoMail é uma ferramenta de uso pessoal e privado. Ele acessa a conta Gmail
-  exclusivamente para ler, classificar, etiquetar, arquivar, mover e excluir e-mails
-  conforme os comandos do próprio usuário.</p>
-  <p>Nenhum dado é vendido, compartilhado com terceiros ou usado para publicidade.
-  As informações são processadas apenas para executar as ações solicitadas e não são
-  armazenadas além do necessário para o funcionamento.</p>
-  <p>Contato: douglas.menegasso@gmail.com</p>
+<div class="sky" aria-hidden="true"><i></i><i></i></div>
+<header>
+  <a class="logo" href="index.html">✉ AutoMail</a>
+  <a href="index.html">← Voltar ao início</a>
+</header>
+<main>
+  <h1>Política de <em>Privacidade</em></h1>
+  <p class="upd">Última atualização: 27 de novembro de 2026</p>
+
+  <section><h2>1. Quem somos</h2>
+    <p>O <strong>AutoMail</strong> é uma ferramenta de uso pessoal e privado, mantida por
+    Douglas Menegasso para organizar a sua própria caixa de entrada Gmail. Não é um serviço
+    público nem comercial.</p></section>
+
+  <section><h2>2. Quais dados são acessados</h2>
+    <ul>
+      <li>Conteúdo dos e-mails (remetente, assunto, corpo) da conta Gmail autorizada;</li>
+      <li>Metadados necessários para classificar, etiquetar, arquivar, mover ou excluir mensagens;</li>
+      <li>Comandos enviados pelo próprio usuário via WhatsApp.</li>
+    </ul></section>
+
+  <section><h2>3. Para que usamos</h2>
+    <p>Exclusivamente para executar as ações solicitadas pelo usuário: classificar e-mails por
+    categoria, aplicar etiquetas, mover para pastas, arquivar, enviar à lixeira ou excluir,
+    e responder com resumos e confirmações.</p></section>
+
+  <section><h2>4. Compartilhamento</h2>
+    <p><strong>Nenhum dado é vendido, alugado ou compartilhado com terceiros</strong>, nem usado
+    para publicidade. O processamento de classificação ocorre em provedores de IA apenas para
+    gerar a categoria do e-mail, sem retenção dos conteúdo por este aplicativo.</p></section>
+
+  <section><h2>5. Retenção e exclusão</h2>
+    <p>O AutoMail não mantém banco de dados próprio com o conteúdo dos e-mails. As mensagens
+    permanecem na conta Gmail do usuário; exclusões seguem exatamente o comando confirmado
+    (lixeira recuperável por 30 dias ou exclusão permanente).</p></section>
+
+  <section><h2>6. Segurança</h2>
+    <p>O acesso usa OAuth 2.0 com token restrito à conta do proprietário, armazenado como
+    segredo de infraestrutura. O acesso pode ser revogado a qualquer momento nas
+    configurações de segurança da conta Google.</p></section>
+
+  <section><h2>7. Seus direitos</h2>
+    <p>Por ser o único usuário e proprietário dos dados, você pode interromper o processamento,
+    revogar o acesso OAuth e excluir quaisquer mensagens a qualquer momento.</p></section>
+
+  <section><h2>8. Contato</h2>
+    <p>Dúvidas sobre esta política: <a href="mailto:douglas.menegasso@gmail.com">douglas.menegasso@gmail.com</a>.</p></section>
+</main>
+<footer>© 2026 AutoMail — uso privado.</footer>
 </body>
 </html>

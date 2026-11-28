@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import unicodedata
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -44,8 +45,13 @@ def _label_id(service, name, create=False):
     return novo["id"]
 
 
-def _latest(service, q):
-    resp = service.users().messages().list(userId="me", q=q, maxResults=1).execute()
+def _latest(service, q, label_ids=None):
+    kwargs = {"userId": "me", "maxResults": 1}
+    if q:
+        kwargs["q"] = q
+    if label_ids:
+        kwargs["labelIds"] = label_ids
+    resp = service.users().messages().list(**kwargs).execute()
     ids = resp.get("messages", [])
     return ids[0]["id"] if ids else None
 
@@ -57,6 +63,11 @@ def _modify(service, mid, add=None, remove=None):
     if remove:
         body["removeLabelIds"] = remove
     service.users().messages().modify(userId="me", id=mid, body=body).execute()
+
+
+def _sem_acento(s: str) -> str:
+    """Remove acentos para comparar comandos ('não é spam' vira 'nao e spam')."""
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
 
 
 def send_wa(to, text, buttons=None, list_items=None, header="", footer=""):
@@ -210,44 +221,46 @@ def _cmd_status():
 
 
 def _cmd_nao_spam(termo):
+    """Busca no SPAM inteiro (nativo do Gmail + AutoMail/Spam) e devolve à entrada."""
     s = _gmail()
-    spam_id = _label_id(s, f"{LABEL}/Spam")
-    aten_id = _label_id(s, f"{LABEL}/Atencao", create=True)
-    q = f"label:{spam_id}"
+    q = "in:spam"
     if termo:
         q += f" {termo}"
     mid = _latest(s, q)
     if not mid:
         return "🤷 Não achei no Spam com esse termo.", None, None
-    _modify(s, mid, add=[aten_id, "INBOX"], remove=[spam_id])
-    return "✅ Tirado do Spam, devolvido pra entrada.", None, None
+    spam_nativo = _label_id(s, "SPAM")
+    spam_automail = _label_id(s, f"{LABEL}/Spam")
+    aten_id = _label_id(s, f"{LABEL}/Atencao", create=True)
+    remover = [lid for lid in (spam_nativo, spam_automail) if lid]
+    _modify(s, mid, add=[aten_id, "INBOX"], remove=remover)
+    return "✅ Tirado do Spam, devolvido pra entrada (AutoMail/Atencao).", None, None
 
 
 def _cmd_mover(termo, pasta):
+    """Busca na caixa inteira (exceto lixeira, enviados e spam) e move para a pasta."""
     s = _gmail()
-    pai = _label_id(s, LABEL)
-    q = f"label:{pai}"
-    if termo:
-        q += f" {termo}"
+    base = "-in:trash -in:sent -in:chat -in:spam"
+    q = f"{termo} {base}" if termo else base
     mid = _latest(s, q)
     if not mid:
         return "🤷 Não achei com esse termo.", None, None
+    pai = _label_id(s, LABEL, create=True)
     alvo = _label_id(s, f"{LABEL}/{pasta}", create=True)
     remove = []
     for nome in SUBPASTAS:
         lid = _label_id(s, f"{LABEL}/{nome}")
         if lid and lid != alvo:
             remove.append(lid)
-    _modify(s, mid, add=[alvo], remove=remove)
+    _modify(s, mid, add=[alvo, pai], remove=remove)
     return f"✅ Movido para {LABEL}/{pasta}.", None, None
 
 
 def _cmd_arquivar(termo):
+    """Busca na caixa inteira (exceto lixeira, enviados e spam) e tira da entrada."""
     s = _gmail()
-    pai = _label_id(s, LABEL)
-    q = f"label:{pai}"
-    if termo:
-        q += f" {termo}"
+    base = "-in:trash -in:sent -in:chat -in:spam"
+    q = f"{termo} {base}" if termo else base
     mid = _latest(s, q)
     if not mid:
         return "🤷 Não achei com esse termo.", None, None
@@ -610,35 +623,37 @@ class handler(BaseHTTPRequestHandler):
             self._resp(200, "ok")
             return
 
-        t = text.strip().lower()
+        stripped = text.strip()
+        t = stripped.lower()
+        tn = _sem_acento(t)
         reply_result = None
 
-        if t in ("ajuda", "help", "?"):
+        if tn in ("ajuda", "help", "?"):
             reply_result = _cmd_ajuda()
-        elif t.startswith("verificar"):
+        elif tn.startswith("verificar"):
             reply_result = _cmd_verificar()
-        elif t.startswith("status"):
+        elif tn.startswith("status"):
             reply_result = _cmd_status()
-        elif t.startswith(("nao e spam", "não é spam", "nao eh spam")):
-            termo = re.sub(r"^(nao e spam|não é spam|nao eh spam)\s*", "",
-                           text, flags=re.I).strip()
+        elif tn.startswith(("nao e spam", "nao eh spam")):
+            prefix_len = len("nao e spam") if tn.startswith("nao e spam") else len("nao eh spam")
+            termo = stripped[prefix_len:].strip()
             reply_result = _cmd_nao_spam(termo)
         elif re.match(r"^mover (.+?) para ([\w\- ]+)$", t):
             m = re.match(r"mover (.+?) para ([\w\- ]+)", t)
-            reply_result = _cmd_mover(m.group(1).strip(),
-                                       m.group(2).strip().title().replace(" ", ""))
-        elif t.startswith("arquivar"):
-            reply_result = _cmd_arquivar(text[len("arquivar"):].strip())
-        elif re.match(r"^ultimos (\d+)$", t):
-            m = re.match(r"ultimos (\d+)", t)
+            pasta = _sem_acento(m.group(2).strip()).title().replace(" ", "")
+            reply_result = _cmd_mover(m.group(1).strip(), pasta)
+        elif tn.startswith("arquivar"):
+            reply_result = _cmd_arquivar(stripped[len("arquivar"):].strip())
+        elif re.match(r"^ultimos (\d+)$", tn):
+            m = re.match(r"ultimos (\d+)", tn)
             reply_result = _cmd_ultimos(m.group(1))
-        elif t.startswith("limpar"):
-            data_arg = text[len("limpar"):].strip()
+        elif tn.startswith("limpar"):
+            data_arg = stripped[len("limpar"):].strip()
             reply_result = _cmd_limpar(data_arg)
-        elif t == "lixeira":
+        elif tn == "lixeira":
             reply_result = _cmd_lixeira()
-        elif t.startswith("lixeira ") and len(t) > 8:
-            termo = text[len("lixeira"):].strip()
+        elif tn.startswith("lixeira ") and len(tn) > 8:
+            termo = stripped[len("lixeira"):].strip()
             reply_result = _cmd_lixeira(termo)
         else:
             reply_result = _cmd_ajuda()

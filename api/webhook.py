@@ -258,7 +258,9 @@ def _cmd_arquivar(termo):
 def _cmd_ultimos(n):
     s = _gmail()
     pai = _label_id(s, LABEL)
-    resp = s.users().messages().list(userId="me", q=f"label:{pai}",
+    if not pai:
+        return "🤷 Nenhuma pasta AutoMail encontrada ainda.", None, None
+    resp = s.users().messages().list(userId="me", labelIds=[pai],
                                      maxResults=int(n)).execute()
     linhas = []
     for m in resp.get("messages", []):

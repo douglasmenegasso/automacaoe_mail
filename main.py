@@ -74,11 +74,23 @@ def _check_sender_rule(sender: str, rules: dict) -> str | None:
     return None
 
 def _formatar_data(data_str: str) -> str:
+    """Converte a data do e-mail (que vem no fuso de quem enviou) para Brasília.
+
+    Sem isso, o alerta mostrava o relógio do remetente (ex.: 08:21 da
+    Califórnia ou 16:15 em UTC) em vez do horário que o Gmail exibe.
+    """
     if not data_str:
         return ""
     try:
         from email.utils import parsedate_to_datetime
+        from datetime import timedelta, timezone
         dt = parsedate_to_datetime(data_str)
+        if dt.tzinfo is not None:
+            try:
+                from zoneinfo import ZoneInfo
+                dt = dt.astimezone(ZoneInfo("America/Sao_Paulo"))
+            except Exception:
+                dt = dt.astimezone(timezone(timedelta(hours=-3)))
         return dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
         return data_str[:20]

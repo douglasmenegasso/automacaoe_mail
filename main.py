@@ -193,6 +193,30 @@ def run(dry_run: bool):
     cont = {"spam_propaganda": 0, "responde_se": 0, "precisa_humano": 0,
             "acoes": 0, "erros": 0}
 
+    # ---- Varredura de sincronização do spam nativo ----
+    # E-mails que estão na caixa de entrada com AutoMail/Spam (ex.: movidos por
+    # comando antes da sincronização existir) são empurrados para o SPAM nativo.
+    sync_spam = 0
+    resp_spam = service.users().messages().list(
+        userId="me", q=f"in:inbox label:{LABEL_NOME}/Spam", maxResults=500).execute()
+    for item_spam in resp_spam.get("messages", []):
+        try:
+            if dry_run:
+                print(f"    [DRY-RUN] sincronizaria spam nativo: {item_spam['id']}")
+                continue
+            service.users().messages().modify(
+                userId="me", id=item_spam["id"],
+                body={"addLabelIds": ["SPAM"], "removeLabelIds": ["INBOX"]}).execute()
+            sync_spam += 1
+        except HttpError as exc:
+            cont["erros"] += 1
+            print(f"    [ERRO] Gmail sync spam: {exc}")
+        except Exception as exc:
+            cont["erros"] += 1
+            print(f"    [ERRO] inesperado sync spam: {exc}")
+    if sync_spam:
+        print(f"[GMAIL] {sync_spam} e-mail(s) sincronizados com o spam nativo.")
+
     for idx, item in enumerate(itens):
         try:
             msg = service.users().messages().get(
@@ -278,8 +302,39 @@ def run(dry_run: bool):
     print(f"spam_propaganda: {cont['spam_propaganda']} | "
           f"responde_se: {cont['responde_se']} | "
           f"precisa_humano: {cont['precisa_humano']}")
-    print(f"acoes executadas: {cont['acoes']} | erros: {cont['erros']}")
+    print(f"acoes executadas: {cont['acoes']} | erros: {cont['erros']} | "
+          f"sync spam nativo: {sync_spam}")
     print(f"modo: {'DRY-RUN (nada foi alterado)' if dry_run else 'PRODUCAO'}")
+
+    # ---- Aviso de conclusão no WhatsApp ----
+    # Regra: manual SEMPRE avisa (mesmo vazio); cron só avisa quando trabalhou.
+    origem = (os.environ.get("ORIGEM", "") or "cron").strip().lower()
+    fez_algo = (cont["spam_propaganda"] + cont["responde_se"] +
+                cont["precisa_humano"] + sync_spam) > 0
+    if fez_algo or origem == "manual":
+        if fez_algo:
+            linhas = [
+                "✅ *Verificação concluída*",
+                "━━━━━━━━━━━━━━━━━━",
+                f"📥 Analisados: {len(itens)}",
+                f"🗑️ Spam: {cont['spam_propaganda']}",
+                f"✉️ Respostas: {cont['responde_se']}",
+                f"🙋 Precisam de você: {cont['precisa_humano']}",
+                f"♻️ Spam nativo sincronizado: {sync_spam}",
+                f"⚙️ Ações: {cont['acoes']} | Erros: {cont['erros']}",
+            ]
+            if dry_run:
+                linhas.append("🧪 DRY-RUN: nada foi alterado.")
+        else:
+            linhas = [
+                "✅ *Verificação concluída*",
+                "━━━━━━━━━━━━━━━━━━",
+                "Nenhum e-mail novo para analisar.",
+            ]
+        if send_whatsapp(cfg, "\n".join(linhas)):
+            print("[WHATSAPP] aviso de conclusão enviado.")
+        else:
+            print("[AVISO] falha ao enviar aviso de conclusão.")
 
 if __name__ == "__main__":
     run("--dry-run" in sys.argv)

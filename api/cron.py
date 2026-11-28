@@ -15,7 +15,8 @@ class handler(BaseHTTPRequestHandler):
             url,
             headers={"Authorization": f"token {GITHUB_PAT}",
                      "Accept": "application/vnd.github+json"},
-            json={"ref": "main", "inputs": {"dry_run": "false"}},
+            json={"ref": "main",
+                  "inputs": {"dry_run": "false", "origem": "cron"}},
         )
         print(f"🔄 GitHub disparado: {r.status_code}")
         self.send_response(200)
